@@ -1,0 +1,10 @@
+id: close_01_clean
+module: finance
+narrative: >
+  Run the month-end close for period {current_period}: check the close-readiness checklist and,
+  if there are no blockers, close the period. Report any warnings.
+seed: baseline
+max_steps: 10
+goal_state:
+  - {check: period_status, period: "{current_period}", status: closed}
+  - {check: tb_balanced}

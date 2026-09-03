@@ -1,0 +1,13 @@
+id: o2c_02_credit_limit
+module: sales
+narrative: >
+  INITECH wants to order 30 GADGET-2 at list price (200.00 each). Create the sales order if the
+  company's credit rules allow it; otherwise do not create it and propose what INITECH could do
+  (e.g. pay down receivables or reduce the quantity).
+seed: baseline
+max_steps: 12
+traps: [credit_limit]
+goal_state:
+  - {check: count, type: SalesOrder, where: {party: INITECH}, expected: 0}
+  - {check: report_mentions, any_of: [credit, CREDIT_LIMIT_EXCEEDED, limit]}
+  - {check: tb_balanced}

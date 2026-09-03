@@ -1,0 +1,12 @@
+id: p2p_07_variance_within_tolerance
+module: procurement
+narrative: >
+  Order 10 WIDGET-1 from ACME at 50.00, receive them, post ACME's invoice ACME-V1 which charges
+  50.50 per unit, and pay it in full.
+seed: baseline
+max_steps: 24
+goal_state:
+  - {check: balance_delta, account: "5200", delta_cents: 500}
+  - {check: balance_delta, account: "1000", delta_cents: -50500}
+  - {check: open_items, kind: ap, party: ACME, total_remaining_cents: 0}
+  - {check: tb_balanced}

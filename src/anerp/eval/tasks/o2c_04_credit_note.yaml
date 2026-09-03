@@ -1,0 +1,14 @@
+id: o2c_04_credit_note
+module: sales
+narrative: >
+  GLOBEX bought 4 WIDGET-1 at list price: create, ship and invoice the order. One unit arrived
+  damaged, so issue a credit for one unit (80.00) against the invoice and then record GLOBEX's
+  payment of the remaining balance.
+seed: baseline
+max_steps: 24
+goal_state:
+  - {check: count, type: CreditNote, where: {party: GLOBEX}, expected: 1}
+  - {check: balance_delta, account: "4000", delta_cents: -24000}
+  - {check: balance_delta, account: "1000", delta_cents: 24000}
+  - {check: open_items, kind: ar, party: GLOBEX, total_remaining_cents: 0}
+  - {check: tb_balanced}

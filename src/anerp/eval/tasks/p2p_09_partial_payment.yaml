@@ -1,0 +1,11 @@
+id: p2p_09_partial_payment
+module: procurement
+narrative: >
+  Order 10 GADGET-2 from ACME at 120.00, receive them and post the matching invoice ACME-P9.
+  Cash is tight: pay only 700.00 now and leave the rest outstanding.
+seed: baseline
+max_steps: 24
+goal_state:
+  - {check: open_items, kind: ap, party: ACME, total_remaining_cents: 50000}
+  - {check: balance_delta, account: "1000", delta_cents: -70000}
+  - {check: tb_balanced}

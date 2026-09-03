@@ -1,0 +1,15 @@
+id: gl_02_reverse_je
+module: finance
+narrative: >
+  A manual journal for 9,999.00 (operating expense against cash) was posted twice this month.
+  Reverse the duplicate so the expense is counted once. Do not delete anything.
+seed: baseline
+max_steps: 14
+traps: [recovery]
+setup:
+  - {tool: post_journal_entry, payload: {memo: "Consulting fee", lines: [{account: "5100", debit: "9999.00"}, {account: "1000", credit: "9999.00"}]}}
+  - {tool: post_journal_entry, payload: {memo: "Consulting fee", lines: [{account: "5100", debit: "9999.00"}, {account: "1000", credit: "9999.00"}]}}
+goal_state:
+  - {check: balance_delta, account: "5100", delta_cents: -999900}
+  - {check: count, type: JournalEntry, where: {status: reversed}, expected: 1}
+  - {check: tb_balanced}
