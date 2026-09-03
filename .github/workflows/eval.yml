@@ -1,0 +1,44 @@
+# Manual: run the evaluation matrix against the dev deployment and upload results as an artifact.
+name: eval
+on:
+  workflow_dispatch:
+    inputs:
+      clients:
+        description: "Comma-separated client adapters (claude_agent_sdk,openai_agents_sdk,google_adk)"
+        default: "claude_agent_sdk"
+      runs:
+        description: "Runs per task x client x server"
+        default: "3"
+      tasks:
+        description: "Comma-separated task ids or 'all'"
+        default: "all"
+      commit_summary:
+        description: "Commit results/summary.csv back to the repo"
+        type: boolean
+        default: false
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras --dev
+      - name: Run matrix
+        run: uv run anerp eval --clients "${{ inputs.clients }}" --runs "${{ inputs.runs }}" --tasks "${{ inputs.tasks }}" --output results
+        env:
+          ANERP_URL: ${{ vars.ANERP_DEV_URL }}
+          ANERP_ADMIN_TOKEN: ${{ secrets.ANERP_DEV_ADMIN_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: results/
+      - name: Commit summary
+        if: ${{ inputs.commit_summary }}
+        run: |
+          git config user.name "anerp-eval"; git config user.email "eval@users.noreply.github.com"
+          git add -f results/*/summary.csv && git commit -m "eval: add summary for $(ls -t results | head -1)" && git push

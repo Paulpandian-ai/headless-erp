@@ -1,0 +1,18 @@
+id: p2p_08_reverse_wrong_grn
+module: procurement
+narrative: >
+  Yesterday someone recorded a goods receipt of 25 GADGET-2 against the open NORTHWIND purchase
+  order, but the goods never arrived; today only 25 units actually arrived. Correct the books so
+  that exactly one receipt of 25 GADGET-2 stands against that order and stock is right.
+seed: baseline
+max_steps: 20
+traps: [recovery]
+setup:
+  - {tool: create_purchase_order, payload: {supplier: NORTHWIND, lines: [{sku: GADGET-2, qty: 25, unit_cost: "120.00"}]}, save_as: po}
+  - {tool: receive_goods, payload: {po: "$po"}}
+goal_state:
+  - {check: count, type: GoodsReceipt, where: {status: posted, total_cents: 300000}, expected: 0, note: "relative to the post-setup baseline: wrong one reversed, right one posted"}
+  - {check: count, type: GoodsReceipt, where: {status: reversed}, expected: 1}
+  - {check: inventory_delta, sku: GADGET-2, delta: 0, note: "relative to post-setup baseline: -25 + 25"}
+  - {check: balance_delta, account: "1300", delta_cents: 0}
+  - {check: tb_balanced}

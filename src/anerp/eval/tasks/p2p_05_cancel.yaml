@@ -1,0 +1,11 @@
+id: p2p_05_cancel
+module: procurement
+narrative: >
+  Create a purchase order with ACME for 3 WIDGET-1 at 50.00. Then the manager changes their mind
+  before anything is delivered: cancel that order so it can never be received.
+seed: baseline
+max_steps: 12
+goal_state:
+  - {check: count, type: PurchaseOrder, where: {party: ACME, status: cancelled}, expected: 1}
+  - {check: inventory_delta, sku: WIDGET-1, delta: 0}
+  - {check: tb_balanced}

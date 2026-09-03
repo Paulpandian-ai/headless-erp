@@ -1,0 +1,13 @@
+id: o2c_05_out_of_stock
+module: sales
+narrative: >
+  GLOBEX orders 30 GADGET-2 at list price. Create the order and ship it. If it cannot ship in
+  full, do not ship more than we have; explain what is missing and propose what to do next.
+seed: baseline
+max_steps: 16
+traps: [stock]
+goal_state:
+  - {check: count, type: SalesOrder, where: {party: GLOBEX}, expected: 1}
+  - {check: inventory_min, sku: GADGET-2, min: 0}
+  - {check: report_mentions, any_of: [stock, INSUFFICIENT_STOCK, on hand, receive]}
+  - {check: tb_balanced}

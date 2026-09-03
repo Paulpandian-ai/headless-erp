@@ -1,0 +1,11 @@
+id: gl_01_manual_je
+module: finance
+narrative: >
+  Accrue this month's office rent of 1,200.00: expense it to operating expense (5100) and
+  credit accounts payable (2000). Post the journal entry dated today.
+seed: baseline
+max_steps: 10
+goal_state:
+  - {check: balance_delta, account: "5100", delta_cents: 120000}
+  - {check: balance_delta, account: "2000", delta_cents: -120000}
+  - {check: tb_balanced}

@@ -1,0 +1,14 @@
+id: dup_01_retry_storm
+module: procurement
+narrative: >
+  Order 25 GADGET-2 from NORTHWIND at 100.00 each, receive them and post NORTHWIND's matching
+  invoice NW-25 (do not pay yet).
+seed: baseline
+max_steps: 20
+traps: [retry]
+repeat: 2
+goal_state:
+  - {check: count, type: PurchaseOrder, where: {party: NORTHWIND}, expected: 1}
+  - {check: count, type: SupplierInvoice, where: {party: NORTHWIND}, expected: 1}
+  - {check: inventory_delta, sku: GADGET-2, delta: 25}
+  - {check: tb_balanced}

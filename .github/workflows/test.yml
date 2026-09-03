@@ -1,0 +1,40 @@
+name: test
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras --dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src
+      - run: uv run pytest -q --cov=anerp --cov-report=term-missing
+        env:
+          ANERP_ENV: test
+          ANERP_DATABASE_URL: "sqlite://"
+          ANERP_TOKEN_PEPPER: ci-pepper
+          ANERP_BOOTSTRAP_ADMIN_TOKEN: anerp_ci_bootstrap
+          LLM_PROVIDER: none
+  integration:
+    if: ${{ vars.ANERP_INTEGRATION == 'true' }}
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras --dev
+      - run: uv run anerp migrate && uv run pytest -q -m integration
+        env:
+          ANERP_ENV: test
+          ANERP_DATABASE_URL: ${{ secrets.ANERP_TEST_DATABASE_URL }}
+          ANERP_TOKEN_PEPPER: ci-pepper
+          ANERP_BOOTSTRAP_ADMIN_TOKEN: anerp_ci_bootstrap

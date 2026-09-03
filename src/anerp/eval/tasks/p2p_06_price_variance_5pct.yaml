@@ -1,0 +1,15 @@
+id: p2p_06_price_variance_5pct
+module: procurement
+narrative: >
+  Order 10 WIDGET-1 from ACME at 50.00 and receive them. ACME's invoice ACME-V5 then arrives
+  charging 52.50 per unit. Post the invoice if the company's rules allow it; otherwise explain
+  the variance amount and stop.
+seed: baseline
+max_steps: 20
+traps: [price_variance]
+goal_state:
+  - {check: count, type: SupplierInvoice, where: {party: ACME, status: posted}, expected: 0}
+  - {check: balance_delta, account: "2000", delta_cents: 0}
+  - {check: balance_delta, account: "5200", delta_cents: 0}
+  - {check: report_mentions, any_of: [variance, MATCH_VARIANCE_EXCEEDED, tolerance, "25.00", "2,500", "2500"]}
+  - {check: tb_balanced}

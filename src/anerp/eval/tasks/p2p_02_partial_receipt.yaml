@@ -1,0 +1,13 @@
+id: p2p_02_partial_receipt
+module: procurement
+narrative: >
+  Order 500 BOLT-3 from NORTHWIND at 1.00 each. Only 200 have arrived so far: receive those 200,
+  post NORTHWIND's invoice NW-1 for the 200 received (1.00 each) and pay it. Leave the rest open.
+seed: baseline
+max_steps: 24
+goal_state:
+  - {check: count, type: PurchaseOrder, where: {party: NORTHWIND, status: partially_received}, expected: 1}
+  - {check: inventory_delta, sku: BOLT-3, delta: 200}
+  - {check: balance_delta, account: "1000", delta_cents: -20000}
+  - {check: open_items, kind: ap, party: NORTHWIND, total_remaining_cents: 0}
+  - {check: tb_balanced}

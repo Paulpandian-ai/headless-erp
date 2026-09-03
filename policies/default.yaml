@@ -1,0 +1,117 @@
+# anerp default policy set (DESIGN.md §9). Rules are evaluated identically in simulate and commit.
+# Conditions are a safe expression subset over the projected-effects facts; unknown names are
+# treated as "missing" and never trigger a rule.
+version: 1
+
+params:
+  po_approval_threshold_cents: 1000000      # 10,000.00
+  price_tolerance_pct: 2.0
+  price_tolerance_abs_cents: 5000            # 50.00
+  large_manual_je_cents: 5000000             # 50,000.00
+
+groups:
+  posting_tools:
+    - receive_goods
+    - post_supplier_invoice
+    - pay_supplier
+    - reverse_goods_receipt
+    - reverse_supplier_invoice
+    - reverse_supplier_payment
+    - ship_order
+    - issue_customer_invoice
+    - record_customer_payment
+    - issue_credit_note
+    - reverse_shipment
+    - reverse_customer_payment
+    - post_journal_entry
+    - reverse_journal_entry
+  approval_tools:
+    - approve_purchase_order
+    - reject_approval
+
+rules:
+  - id: period_lock
+    description: Nothing posts into a closed fiscal period.
+    applies_to: ["@posting_tools"]
+    effect: deny
+    error_code: PERIOD_CLOSED
+    condition: "period.status == 'closed'"
+    message: "posting date {posting_date} falls in closed period {period.code}"
+
+  - id: po_approval_threshold
+    description: Purchase orders above the threshold need a human approver.
+    applies_to: [create_purchase_order]
+    effect: requires_approval
+    condition: "po.total_cents > params.po_approval_threshold_cents"
+    message: "PO total {po.total_cents} cents exceeds approval threshold {params.po_approval_threshold_cents} cents"
+
+  - id: po_approver_differs
+    description: Four-eyes control - the approver must not be the creator.
+    applies_to: [approve_purchase_order]
+    effect: deny
+    condition: "actor.id == po.created_by"
+    message: "approver {actor.id} created the purchase order"
+
+  - id: human_approval_only
+    description: Approval decisions require a human (or admin) token in the POC.
+    applies_to: ["@approval_tools"]
+    effect: deny
+    condition: "actor.kind == 'agent'"
+    message: "approval tools reject agent tokens; hand off to a human approver"
+
+  - id: three_way_match_qty
+    description: Invoice quantity may not exceed received-minus-already-invoiced quantity.
+    applies_to: [post_supplier_invoice]
+    effect: deny
+    error_code: MATCH_VARIANCE_EXCEEDED
+    condition: "match.qty_exceeded and not match.parked"
+    message: "invoiced quantity exceeds received quantity on lines {match.qty_exceeded_lines}"
+
+  # Tolerance is the stricter of the two thresholds: a line whose unit price deviates by more than
+  # price_tolerance_pct, OR an invoice whose total variance exceeds price_tolerance_abs_cents, is
+  # blocked. Inside both, the variance posts to 5200 with a warning. Parked (blocked) invoices
+  # bypass the deny so the AP lead can investigate them; they carry no GL or AP effect.
+  - id: three_way_match_price
+    description: Price variance beyond tolerance is blocked; inside tolerance posts to 5200.
+    applies_to: [post_supplier_invoice]
+    effect: deny
+    error_code: MATCH_VARIANCE_EXCEEDED
+    condition: "not match.parked and (match.max_variance_pct > params.price_tolerance_pct or abs(match.variance_cents) > params.price_tolerance_abs_cents)"
+    message: "price variance {match.variance_cents} cents exceeds tolerance (max line deviation {match.max_variance_pct}%, tolerance {params.price_tolerance_pct}% / {params.price_tolerance_abs_cents} cents total)"
+
+  - id: three_way_match_price_warn
+    description: Warn when a variance inside tolerance will post to purchase price variance.
+    applies_to: [post_supplier_invoice]
+    effect: warn
+    condition: "not match.parked and match.variance_cents != 0 and not (match.max_variance_pct > params.price_tolerance_pct or abs(match.variance_cents) > params.price_tolerance_abs_cents)"
+    message: "variance of {match.variance_cents} cents is within tolerance and posts to account 5200"
+
+  - id: customer_credit_limit
+    description: Open AR plus this document may not exceed the customer's credit limit.
+    applies_to: [create_sales_order, issue_customer_invoice]
+    effect: deny
+    error_code: CREDIT_LIMIT_EXCEEDED
+    condition: "credit.exposure_after_cents > credit.credit_limit_cents"
+    message: "exposure after this document {credit.exposure_after_cents} cents exceeds credit limit {credit.credit_limit_cents} cents"
+
+  - id: stock_available
+    description: Stocked items cannot ship beyond on-hand quantity.
+    applies_to: [ship_order]
+    effect: deny
+    error_code: INSUFFICIENT_STOCK
+    condition: "stock.shortfall"
+    message: "insufficient stock for {stock.short_skus}"
+
+  - id: close_readiness
+    description: A period closes only when nothing is blocked and the trial balance balances.
+    applies_to: [close_period]
+    effect: deny
+    condition: "close.blocked_invoices > 0 or not close.trial_balance_ok"
+    message: "close blocked: {close.blocked_invoices} blocked supplier invoice(s), trial balance ok={close.trial_balance_ok}"
+
+  - id: large_manual_je
+    description: Flag unusually large manual journal entries.
+    applies_to: [post_journal_entry]
+    effect: warn
+    condition: "je.total_debit_cents > params.large_manual_je_cents"
+    message: "manual journal entry of {je.total_debit_cents} cents is above the review threshold"
