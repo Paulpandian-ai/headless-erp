@@ -1,0 +1,20 @@
+{
+  "name": "anerp",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv sync && sudo apt-get update && sudo apt-get install -y postgresql-client",
+  "forwardPorts": [8000],
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "charliermarsh.ruff"],
+      "settings": {"python.defaultInterpreterPath": ".venv/bin/python"}
+    }
+  },
+  "remoteEnv": {
+    "PATH": "${containerEnv:HOME}/.local/bin:${containerEnv:PATH}",
+    "ANERP_ENV": "dev",
+    "ANERP_DATABASE_URL": "sqlite:///./anerp.db"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "anerp": {
+      "type": "http",
+      "url": "${ANERP_URL:-http://localhost:8000}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ANERP_ADMIN_TOKEN}"
+      }
+    },
+    "anerp-local": {
+      "command": "uv",
+      "args": ["run", "anerp", "mcp", "--stdio"],
+      "env": {
+        "ANERP_DATABASE_URL": "sqlite:///./anerp.db",
+        "ANERP_TOKEN": "${ANERP_ADMIN_TOKEN}"
+      }
+    }
+  }
+}
