@@ -98,6 +98,11 @@ def test_stale_simulation(kernel, agent: Client) -> None:
     )
     assert stale["error"]["code"] == "STALE_SIMULATION"
     assert stale["error"]["details"]["changed"]
+    unknown = agent.commit(
+        "receive_goods", simulation_id="01NOPE", po=number, lines=[{"sku": "WIDGET-1", "qty": 1}]
+    )
+    assert unknown["error"]["code"] == "STALE_SIMULATION"
+
     fresh = agent.simulate("receive_goods", po=number, lines=[{"sku": "WIDGET-1", "qty": 1}])
     assert agent.commit(
         "receive_goods",
@@ -105,10 +110,6 @@ def test_stale_simulation(kernel, agent: Client) -> None:
         po=number,
         lines=[{"sku": "WIDGET-1", "qty": 1}],
     )["ok"]
-    unknown = agent.commit(
-        "receive_goods", simulation_id="01NOPE", po=number, lines=[{"sku": "WIDGET-1", "qty": 1}]
-    )
-    assert unknown["error"]["code"] == "STALE_SIMULATION"
 
 
 def test_envelope_validation(kernel) -> None:
@@ -191,3 +192,145 @@ def test_replay_simulate(kernel, agent: Client) -> None:
         and replay2["current_simulation"]["error"]["code"] == "PRECONDITION_FAILED"
     )
     assert agent.query("search_documents", type="PurchaseOrder")["count"] == 2
+
+
+def test_requires_approval_without_draft_is_deduplicated_receipted_and_idempotent(
+    kernel, agent: Client, human: Client
+) -> None:
+    """A tool with no pending-version hook: nothing of the projection is written, one pending
+    ApprovalRequest exists across retries and duplicate submissions, the write is receipted, and
+    the same idempotency key replays the same REQUIRES_APPROVAL answer."""
+    from pathlib import Path
+
+    from anerp.policy import engine as policy_engine
+    from anerp.policy.engine import PolicyEngine
+
+    yaml_text = (
+        Path("policies/default.yaml").read_text()
+        + """
+  - id: large_je_needs_approval
+    applies_to: [post_journal_entry]
+    effect: requires_approval
+    condition: "je.total_debit_cents > 100000"
+    message: "manual entries above 1,000.00 need a controller"
+"""
+    )
+    policy_engine.set_engine(PolicyEngine.from_yaml(yaml_text))
+    payload = {
+        "memo": "big accrual",
+        "lines": [
+            {"account": "5100", "debit": "5000.00"},
+            {"account": "2000", "credit": "5000.00"},
+        ],
+    }
+    before = agent.query("get_account_balance", account_code="5100")["net_cents"]
+    first = agent.commit("post_journal_entry", key="je-approval-0001", **payload)
+    assert not first["ok"] and first["error"]["code"] == "REQUIRES_APPROVAL"
+    details = first["error"]["details"]
+    approval_id = details["approval_request_id"]
+    assert details["deduplicated"] is False and details["receipt_id"] == first["receipt"]["id"]
+    assert agent.query("verify_receipt", receipt_id=details["receipt_id"])["valid"]
+    # same key -> replayed, same request; different key, same payload -> deduplicated onto it
+    again = agent.commit("post_journal_entry", key="je-approval-0001", **payload)
+    assert (
+        again["status"] == "replayed"
+        and again["error"]["details"]["approval_request_id"] == approval_id
+    )
+    retry = agent.commit("post_journal_entry", key="je-approval-0002", **payload)
+    assert (
+        retry["error"]["details"]["approval_request_id"] == approval_id
+        and retry["error"]["details"]["deduplicated"] is True
+    )
+    pending = human.query("list_pending_approvals")
+    assert pending["count"] == 1 and pending["pending"][0]["document_id"] is None
+    assert (
+        pending["pending"][0]["projected_effects"]["journal_entry"]["total_debit_cents"] == 500000
+    )
+    # nothing of the business projection was written; the request itself is traceable
+    assert agent.query("get_account_balance", account_code="5100")["net_cents"] == before
+    assert (
+        agent.query("search_documents", type="JournalEntry", status="posted")["count"]
+        == agent.query("search_documents", type="JournalEntry")["count"]
+    )
+    trace = agent.query("trace_document", id_or_number=approval_id)
+    assert (
+        trace["root"]["type"] == "ApprovalRequest"
+        and trace["nodes"][0]["receipts"][0]["tool"] == "post_journal_entry"
+    )
+    events = agent.query("poll_events", after_seq=0, types=["approval.requested"])
+    assert events["count"] == 2 and all(e["receipt_id"] for e in events["events"])
+    assert human.ok("reject_approval", request_id=approval_id, reason="not now")["ok"]
+
+
+def test_idempotency_race_returns_replayed(kernel, agent: Client, monkeypatch) -> None:
+    """Two commits with the same key that both pass the lookup: the loser hits the primary key
+    at commit time and must answer with the winner's stored response, not INTERNAL_ERROR."""
+    from anerp.core import dispatch as d
+
+    payload = {"supplier": "ACME", "lines": [{"sku": "WIDGET-1", "qty": 2, "unit_cost": "50.00"}]}
+    first = agent.commit("create_purchase_order", key="race-key-0001", **payload)
+    assert first["status"] == "applied"
+    count = agent.query("search_documents", type="PurchaseOrder")["count"]
+    monkeypatch.setattr(
+        d.idempotency, "lookup", lambda session, key: None
+    )  # both "pass" the lookup
+    second = agent.commit("create_purchase_order", key="race-key-0001", **payload)
+    assert second["ok"] and second["status"] == "replayed"
+    assert second["document"] == first["document"] and second["receipt"] == first["receipt"]
+    assert agent.query("search_documents", type="PurchaseOrder")["count"] == count
+    conflict = agent.commit(
+        "create_purchase_order",
+        key="race-key-0001",
+        supplier="ACME",
+        lines=[{"sku": "WIDGET-1", "qty": 3, "unit_cost": "50.00"}],
+    )
+    assert (
+        conflict["error"]["code"] == "INTERNAL_ERROR"
+    )  # different payload racing the same key: nothing applied
+    assert agent.query("search_documents", type="PurchaseOrder")["count"] == count
+
+
+def test_principal_required_outside_test_env(kernel, agent: Client, monkeypatch) -> None:
+    from anerp.config import get_settings
+    from anerp.core.envelope import local_principal
+    from anerp.mcp_server.registry import call_tool
+
+    monkeypatch.setattr(get_settings(), "env", "dev")
+    for tool_name, payload in (
+        ("approve_purchase_order", {"po": "PO-000001"}),
+        ("receive_goods", {"po": "PO-000001"}),
+        ("create_supplier", {"code": "Q", "name": "Q"}),
+    ):
+        r = dispatch(
+            Envelope(
+                tool=tool_name,
+                mode="simulate",
+                actor=Actor(id="human:forged", kind="human"),
+                payload=payload,
+            )
+        )
+        assert r["error"]["code"] == "UNAUTHORIZED", tool_name
+    assert run_query("get_trial_balance", {}, AGENT)["error"]["code"] == "UNAUTHORIZED"
+    assert call_tool("get_trial_balance", {}, None)["error"]["code"] == "UNAUTHORIZED"
+    ok = dispatch(
+        Envelope(
+            tool="create_supplier", mode="simulate", actor=AGENT, payload={"code": "Q", "name": "Q"}
+        ),
+        principal=local_principal("human:cli"),
+    )
+    assert ok["ok"]
+    assert run_query("get_trial_balance", {}, AGENT, principal=local_principal())["ok"]
+
+
+def test_internal_error_message_is_generic(kernel, agent: Client, monkeypatch) -> None:
+    from anerp.core.registry import registry
+
+    tool = registry.get("create_supplier")
+
+    def boom(ctx, payload):
+        raise RuntimeError("SELECT secret FROM customers -- leaked detail")
+
+    monkeypatch.setattr(tool, "project", boom)
+    r = agent.commit("create_supplier", code="X", name="X")
+    assert r["error"]["code"] == "INTERNAL_ERROR"
+    assert "leaked" not in r["error"]["message"] and r["request_id"] in r["error"]["message"]

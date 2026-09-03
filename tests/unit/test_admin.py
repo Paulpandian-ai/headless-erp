@@ -100,8 +100,21 @@ def test_reset_and_seed_dev_only(kernel, admin: Client, agent: Client, monkeypat
     from anerp.config import get_settings
 
     monkeypatch.setattr(get_settings(), "env", "demo")
-    denied = admin.commit("reset_and_seed", fixture_name="baseline", confirm="RESET")
+    from anerp.core.envelope import local_principal
+
+    denied = dispatch(
+        Envelope(
+            tool="reset_and_seed",
+            mode="commit",
+            idempotency_key="reset-demo-0001",
+            actor=ADMIN,
+            payload={"fixture_name": "baseline", "confirm": "RESET"},
+        ),
+        principal=local_principal("admin:ops"),
+    )
     assert denied["error"]["code"] == "PRECONDITION_FAILED"
+    unauthenticated = admin.commit("reset_and_seed", fixture_name="baseline", confirm="RESET")
+    assert unauthenticated["error"]["code"] == "UNAUTHORIZED"
 
 
 def test_principal_scope_matching() -> None:

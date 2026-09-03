@@ -99,7 +99,7 @@ def _root(session: Any, type_name: str, row: Any) -> tuple[str, Any]:
         found = find_document(session, row.source_id)
         if found and found[0] != "JournalEntry":
             return _root(session, *found)
-    if type_name == "ApprovalRequest":
+    if type_name == "ApprovalRequest" and row.document_id:
         found = find_document(session, row.document_id)
         if found:
             return _root(session, *found)
@@ -348,7 +348,7 @@ class ReplaySimulate(QueryTool):
             actor=Actor(id=ctx.actor.id, kind=ctx.actor.kind, on_behalf_of=f"replay:{receipt.id}"),
             payload=receipt.payload_json,
         )
-        now = dispatch(env)
+        now = dispatch(env, principal=ctx.principal)
         original = receipt.projection_json
         current = now.get("projected_effects") if now.get("ok") else None
         return {

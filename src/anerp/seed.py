@@ -52,7 +52,7 @@ def _call(
 ) -> dict[str, Any]:
     """Dispatch a commit in-process. The seed shares the caller's engine, not its session."""
     from anerp.core.dispatch import dispatch
-    from anerp.core.envelope import Actor, Envelope
+    from anerp.core.envelope import Actor, Envelope, local_principal
 
     # Flush the caller's transaction so dispatch (own session) can see kernel rows on SQLite.
     session.commit()
@@ -63,7 +63,8 @@ def _call(
             idempotency_key=f"seed:{key}",
             actor=Actor(id=actor_id, kind="admin"),
             payload=payload,
-        )
+        ),
+        principal=local_principal(actor_id),
     )
     if not result.get("ok"):
         raise RuntimeError(f"seed step {tool} failed: {result.get('error')}")

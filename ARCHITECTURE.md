@@ -49,6 +49,14 @@ Pipeline (identical for both modes until the branch):
    journal entry, create the approval request if pending, emit events, sign the receipt over
    (before_hash, action_hash, after_hash), store the idempotency record, commit.
 
+Two edge cases in the commit branch are handled explicitly. A tool without a pending-version
+hook that policy marks `requires_approval` writes only a deduplicated, receipted
+`ApprovalRequest` plus the idempotency record, and returns `REQUIRES_APPROVAL`. Two concurrent
+commits with the same key can both pass the lookup; the loser's idempotency insert fails at
+commit time and the dispatcher answers with the winner's stored response (`status: replayed`).
+Outside `ANERP_ENV=test` every call must carry a principal, from a token or an explicit
+`local_principal()`; the envelope's self-declared actor is never trusted on its own.
+
 ## Ledger invariants
 
 Only `ledger.posting.post_journal` writes journal rows. It refuses unbalanced entries, entries

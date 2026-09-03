@@ -70,9 +70,14 @@ class Environment:
             r = call_tool_http(self.remote_url or "", self.remote_token or "", name, payload)
         else:
             from anerp.core.dispatch import run_query
-            from anerp.core.envelope import Actor
+            from anerp.core.envelope import Actor, local_principal
 
-            r = run_query(name, payload, Actor(id="eval:harness", kind="admin"))
+            r = run_query(
+                name,
+                payload,
+                Actor(id="eval:harness", kind="admin"),
+                principal=local_principal("eval:harness"),
+            )
         if not r.get("ok"):
             raise RuntimeError(f"{name} failed: {r.get('error')}")
         return dict(r["result"])
@@ -90,7 +95,7 @@ class Environment:
             )
         else:
             from anerp.core.dispatch import dispatch
-            from anerp.core.envelope import Actor, Envelope
+            from anerp.core.envelope import Actor, Envelope, local_principal
 
             r = dispatch(
                 Envelope(
@@ -99,7 +104,8 @@ class Environment:
                     idempotency_key=key,
                     actor=Actor(id="eval:harness", kind="human"),
                     payload=payload,
-                )
+                ),
+                principal=local_principal("eval:harness"),
             )
         if not r.get("ok"):
             raise RuntimeError(f"setup {tool} failed: {r.get('error')}")

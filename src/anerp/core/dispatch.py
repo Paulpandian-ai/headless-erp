@@ -12,7 +12,8 @@ from datetime import timedelta
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
-from sqlmodel import Session
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, select
 
 from anerp.approvals.models import ApprovalRequest
 from anerp.config import get_settings
@@ -34,7 +35,7 @@ from anerp.core.requestlog import (
 from anerp.db import new_session
 from anerp.events.log import emit
 from anerp.ledger import idempotency
-from anerp.ledger.models import Receipt
+from anerp.ledger.models import IdempotencyRecord, Receipt
 from anerp.ledger.posting import post_journal
 from anerp.ledger.receipts import keyring, receipt_message, receipt_to_dict, snapshot_hash
 from anerp.ledger.sequences import allocate_number
@@ -42,6 +43,10 @@ from anerp.policy.engine import get_engine
 from anerp.policy.rules import PolicyResult
 
 log = logging.getLogger("anerp.dispatch")
+
+_INTERNAL_MESSAGE = (
+    "internal error; the details are in the server log under request_id {request_id}"
+)
 
 
 def _jsonable(obj: Any) -> Any:
@@ -133,6 +138,20 @@ class _Timer:
 # --------------------------------------------------------------------------------------
 # Public API
 # --------------------------------------------------------------------------------------
+def _require_principal(principal: Principal | None) -> AnerpError | None:
+    """Outside ANERP_ENV=test a call without a principal is unauthenticated: the envelope's
+    self-declared actor (and therefore `actor.kind`, which `human_approval_only` relies on) is
+    only believed when it comes from a token or an explicit `local_principal()`."""
+    if principal is not None or get_settings().env == "test":
+        return None
+    return AnerpError(
+        ErrorCode.UNAUTHORIZED,
+        "no principal: network paths must resolve a bearer token and in-process callers must pass "
+        "an explicit Principal (anerp.core.envelope.local_principal)",
+        {},
+    )
+
+
 def resolve_actor(envelope_actor: Actor, principal: Principal | None) -> Actor:
     if principal is None:
         return envelope_actor
@@ -180,6 +199,17 @@ def dispatch(
         "idempotency_key": envelope.idempotency_key,
         "on_behalf_of": actor.on_behalf_of,
     }
+    if (missing := _require_principal(principal)) is not None:
+        _log(
+            {
+                **base_log,
+                "outcome": "error",
+                "error_code": missing.code.value,
+                "error_message": missing.message,
+                "latency_ms": timer.ms,
+            }
+        )
+        return _error_response(missing, mode=mode, request_id=request_id)
     if principal is not None and not principal.has_scope(tool.scope):
         err = AnerpError(
             ErrorCode.FORBIDDEN,
@@ -238,10 +268,12 @@ def dispatch(
             }
         )
         return _error_response(exc, mode=mode, request_id=request_id)
-    except Exception as exc:  # noqa: BLE001 - convert to INTERNAL_ERROR, never leak a 500 to an agent
+    except Exception:  # noqa: BLE001 - convert to INTERNAL_ERROR, never leak a 500 to an agent
         session.rollback()
         log.exception("internal error in %s (%s)", tool.name, request_id)
-        err = AnerpError(ErrorCode.INTERNAL_ERROR, f"{type(exc).__name__}: {exc}", {})
+        err = AnerpError(
+            ErrorCode.INTERNAL_ERROR, _INTERNAL_MESSAGE.format(request_id=request_id), {}
+        )
         _log(
             {
                 **base_log,
@@ -281,6 +313,17 @@ def run_query(
     if tool is None or not isinstance(tool, QueryTool):
         err = AnerpError(ErrorCode.VALIDATION_ERROR, f"unknown query tool '{name}'", {"tool": name})
         return _error_response(err, mode="query", request_id=request_id)
+    if (missing := _require_principal(principal)) is not None:
+        _log(
+            {
+                **base_log,
+                "outcome": "error",
+                "error_code": missing.code.value,
+                "error_message": missing.message,
+                "latency_ms": timer.ms,
+            }
+        )
+        return _error_response(missing, mode="query", request_id=request_id)
     if principal is not None and not principal.has_scope(tool.scope):
         err = AnerpError(
             ErrorCode.FORBIDDEN,
@@ -338,9 +381,11 @@ def run_query(
             }
         )
         return _error_response(exc, mode="query", request_id=request_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         log.exception("internal error in query %s (%s)", name, request_id)
-        err = AnerpError(ErrorCode.INTERNAL_ERROR, f"{type(exc).__name__}: {exc}", {})
+        err = AnerpError(
+            ErrorCode.INTERNAL_ERROR, _INTERNAL_MESSAGE.format(request_id=request_id), {}
+        )
         _log(
             {
                 **base_log,
@@ -505,22 +550,8 @@ def _commit(
                 f"idempotency_key '{envelope.idempotency_key}' was used with a different payload",
                 {"idempotency_key": envelope.idempotency_key, "original_tool": existing.tool_name},
             )
-        replayed: dict[str, Any] = dict(existing.response_json)
-        replayed["status"] = "replayed"
-        replayed["request_id"] = request_id
-        _log(
-            {
-                **base_log,
-                "outcome": "replayed",
-                "latency_ms": timer.ms,
-                "receipt_id": existing.receipt_id,
-                "document_id": (replayed.get("document") or {}).get("id"),
-            }
-        )
-        return replayed
+        return _replayed(existing, request_id, base_log, timer)
 
-    if envelope.simulation_id:
-        _check_simulation(envelope.simulation_id, tool.name, req_hash, None)
     projection, policy, ctx = _project_and_evaluate(
         session, tool, actor, payload, request_id, "commit", principal
     )
@@ -542,15 +573,18 @@ def _commit(
     pending_approval = False
     if policy.decision == "requires_approval":
         if projection.on_requires_approval is None:
-            approval = _create_standalone_approval(session, tool, projection, actor, policy)
-            raise AnerpError(
-                ErrorCode.REQUIRES_APPROVAL,
-                "; ".join(policy.reasons) or "approval required",
-                {
-                    "policy": policy.as_dict(),
-                    "approval_request_id": approval.id,
-                    "projected_effects": _projection_dict(projection, committed=False),
-                },
+            return _standalone_approval(
+                session,
+                tool,
+                projection,
+                actor,
+                policy,
+                envelope,
+                req_hash,
+                before_hash,
+                request_id,
+                base_log,
+                timer,
             )
         projection.on_requires_approval()
         pending_approval = True
@@ -722,7 +756,21 @@ def _commit(
     response = _jsonable(response)
     stored = {k: v for k, v in response.items() if k != "secret"}
     idempotency.store(session, envelope.idempotency_key, tool.name, req_hash, stored, receipt.id)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # Two concurrent commits with the same key both passed the lookup; the loser's insert
+        # violates the primary key. The winner's effects stand: answer with its stored response.
+        session.rollback()
+        winner = session.get(IdempotencyRecord, envelope.idempotency_key)
+        if winner is not None and winner.request_hash == req_hash:
+            log.warning(
+                "idempotency race on key %s (%s): returning the stored response",
+                envelope.idempotency_key,
+                request_id,
+            )
+            return _replayed(winner, request_id, base_log, timer)
+        raise
     if projection.after_commit is not None:
         projection.after_commit()
     _log(
@@ -742,7 +790,7 @@ def _commit(
 
 
 def _check_simulation(
-    simulation_id: str, tool_name: str, req_hash: str, current: dict[str, int] | None
+    simulation_id: str, tool_name: str, req_hash: str, current: dict[str, int]
 ) -> None:
     record = simulations.get(simulation_id)
     if record is None:
@@ -763,8 +811,6 @@ def _check_simulation(
             "simulation expired; re-simulate",
             {"simulation_id": simulation_id},
         )
-    if current is None:
-        return
     changed = {
         k: (v, current.get(k)) for k, v in record.state_versions.items() if current.get(k) != v
     }
@@ -779,34 +825,163 @@ def _check_simulation(
         )
 
 
-def _create_standalone_approval(
-    session: Session, tool: WriteTool, projection: Projection, actor: Actor, policy: PolicyResult
-) -> ApprovalRequest:
-    """Approval needed but the tool cannot persist a pending version: record the request only."""
+def _replayed(
+    record: IdempotencyRecord, request_id: str, base_log: dict[str, Any], timer: _Timer
+) -> dict[str, Any]:
+    replayed: dict[str, Any] = dict(record.response_json)
+    replayed["status"] = "replayed"
+    replayed["request_id"] = request_id
+    _log(
+        {
+            **base_log,
+            "outcome": "replayed",
+            "latency_ms": timer.ms,
+            "receipt_id": record.receipt_id,
+            "document_id": (replayed.get("document") or {}).get("id"),
+        }
+    )
+    return replayed
+
+
+def _standalone_approval(
+    session: Session,
+    tool: WriteTool,
+    projection: Projection,
+    actor: Actor,
+    policy: PolicyResult,
+    envelope: Envelope,
+    req_hash: str,
+    before_hash: str,
+    request_id: str,
+    base_log: dict[str, Any],
+    timer: _Timer,
+) -> dict[str, Any]:
+    """Approval needed but the tool cannot persist a pending version.
+
+    Nothing of the business projection is written. What is written, in one transaction and with a
+    receipt: one pending ApprovalRequest (deduplicated on tool + request hash, so retries and
+    duplicate submissions share it), its event, and the idempotency record for this key, so a
+    replay of the same key returns this same REQUIRES_APPROVAL response. After the approval is
+    granted the agent commits again with a new key.
+    """
+    assert envelope.idempotency_key is not None
     session.rollback()
     primary = projection.primary
-    approval = ApprovalRequest(
-        document_type=primary.type if primary else tool.name,
-        document_id=primary.instance.id if primary else "",
-        document_number=getattr(primary.instance, "number", None) if primary else None,
-        tool_name=tool.name,
-        requested_by=actor.id,
-        reason="; ".join(policy.reasons),
-        projected_effects_json=_projection_dict(projection, committed=False),
-        expires_at=utcnow() + timedelta(hours=get_settings().approval_ttl_hours),
+    persisted_target = primary is not None and primary.action == "update"
+    pending = session.exec(
+        select(ApprovalRequest).where(
+            ApprovalRequest.tool_name == tool.name,
+            ApprovalRequest.request_hash == req_hash,
+            ApprovalRequest.status == "pending",
+        )
+    ).first()
+    deduplicated = pending is not None
+    if pending is None:
+        pending = ApprovalRequest(
+            document_type=primary.type if primary else tool.name,
+            document_id=primary.instance.id if (primary and persisted_target) else None,
+            document_number=getattr(primary.instance, "number", None)
+            if (primary and persisted_target)
+            else None,
+            tool_name=tool.name,
+            request_hash=req_hash,
+            requested_by=actor.id,
+            reason="; ".join(policy.reasons),
+            projected_effects_json=_projection_dict(projection, committed=False),
+            expires_at=utcnow() + timedelta(hours=get_settings().approval_ttl_hours),
+        )
+        session.add(pending)
+        session.flush()
+    payload_dict = envelope.payload
+    action_hash = hash_obj(
+        {
+            "tool_name": tool.name,
+            "payload": payload_dict,
+            "actor": {"id": actor.id, "kind": actor.kind, "on_behalf_of": actor.on_behalf_of},
+        }
     )
-    session.add(approval)
+    signed_at = utcnow()
+    after_hash = snapshot_hash([pending])
+    message = receipt_message(
+        tool.name, pending.id, before_hash, action_hash, after_hash, signed_at
+    )
+    signature, key_id = keyring.sign(session, message)
+    receipt = Receipt(
+        tool_name=tool.name,
+        actor_id=actor.id,
+        actor_kind=actor.kind,
+        on_behalf_of=actor.on_behalf_of,
+        document_type="ApprovalRequest",
+        document_id=pending.id,
+        document_number=pending.document_number,
+        before_hash=before_hash,
+        action_hash=action_hash,
+        after_hash=after_hash,
+        signature=signature,
+        public_key_id=key_id,
+        signed_at=signed_at,
+        idempotency_key=envelope.idempotency_key,
+        payload_json=payload_dict,
+        projection_json=_projection_dict(projection, committed=False),
+    )
+    session.add(receipt)
     session.flush()
-    emit(
+    event = emit(
         session,
         "approval.requested",
         document_type="ApprovalRequest",
-        document_id=approval.id,
-        number=approval.document_number,
+        document_id=pending.id,
+        number=pending.document_number,
         status="pending",
-        summary=f"Approval requested for {tool.name} on {approval.document_type} {approval.document_number or approval.document_id}",
+        summary=(
+            f"Approval requested for {tool.name}"
+            + (" (duplicate submission joined the pending request)" if deduplicated else "")
+        ),
         actor_id=actor.id,
-        extra={"approval_request_id": approval.id, "for_document_id": approval.document_id},
+        receipt_id=receipt.id,
+        extra={
+            "approval_request_id": pending.id,
+            "for_document_id": pending.document_id,
+            "deduplicated": deduplicated,
+        },
     )
+    err = AnerpError(
+        ErrorCode.REQUIRES_APPROVAL,
+        "; ".join(policy.reasons) or "approval required",
+        {
+            "policy": policy.as_dict(),
+            "approval_request_id": pending.id,
+            "approval_request_status": pending.status,
+            "deduplicated": deduplicated,
+            "receipt_id": receipt.id,
+            "projected_effects": _projection_dict(projection, committed=False),
+            "next_step": "a human approver decides via the approval inbox; then commit again with a new idempotency_key",
+        },
+    )
+    response = _jsonable(
+        _error_response(
+            err,
+            mode="commit",
+            request_id=request_id,
+            extra={
+                "events_emitted": [{"seq": event.seq, "type": event.type}],
+                "receipt": receipt_to_dict(receipt),
+            },
+        )
+    )
+    idempotency.store(session, envelope.idempotency_key, tool.name, req_hash, response, receipt.id)
     session.commit()
-    return approval
+    _log(
+        {
+            **base_log,
+            "outcome": "error",
+            "error_code": err.code.value,
+            "error_message": err.message,
+            "policy_decision": policy.decision,
+            "policy": policy.as_dict(),
+            "latency_ms": timer.ms,
+            "document_id": pending.id,
+            "receipt_id": receipt.id,
+        }
+    )
+    return response

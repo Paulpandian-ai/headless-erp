@@ -28,6 +28,13 @@ def _local_actor() -> Any:
     return Actor(id=os.environ.get("ANERP_CLI_ACTOR", "human:cli"), kind="admin")
 
 
+def _local_principal() -> Any:
+    """The CLI is a trusted in-process head; it states that trust explicitly."""
+    from anerp.core.envelope import local_principal
+
+    return local_principal(_local_actor().id)
+
+
 def _query(name: str, **payload: Any) -> Any:
     """Run a query tool in-process (ANERP_DATABASE_URL) or over HTTP when ANERP_URL is set."""
     url = os.environ.get("ANERP_URL")
@@ -40,7 +47,7 @@ def _query(name: str, **payload: Any) -> Any:
     from anerp.server import startup_checks
 
     startup_checks()
-    return run_query(name, payload, _local_actor())
+    return run_query(name, payload, _local_actor(), principal=_local_principal())
 
 
 @app.command()
@@ -134,7 +141,8 @@ def token_mint(subject: str, kind: str = "agent", scopes: str = "*:read") -> Non
                 "kind": kind,
                 "scopes": [s.strip() for s in scopes.split(",")],
             },
-        )
+        ),
+        principal=_local_principal(),
     )
     _print(
         r

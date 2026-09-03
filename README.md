@@ -102,6 +102,11 @@ persisted as `draft` with a pending `ApprovalRequest`. `approve_purchase_order` 
 approve their own PO (`po_approver_differs`). The A2A agent returns `input-required` with the
 request id; `list_pending_approvals` is the inbox for any head (chat client, CLI, console).
 
+Tools that cannot hold a pending version return `REQUIRES_APPROVAL` instead. That path still
+writes exactly one thing, receipted: a pending `ApprovalRequest` deduplicated on tool and
+payload hash, so retries and duplicate submissions share it, and the idempotency record for the
+key, so a replay returns the same answer. After approval the agent commits again with a new key.
+
 ## Admin bootstrap
 
 1. Set `ANERP_BOOTSTRAP_ADMIN_TOKEN` (generate one with `uv run anerp token bootstrap`),
