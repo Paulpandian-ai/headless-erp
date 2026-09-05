@@ -22,7 +22,10 @@ jobs:
             echo "app=anerp-dev" >> "$GITHUB_OUTPUT"; echo "env=dev" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy (migrations run in the release command, never at request time)
-        run: flyctl deploy --remote-only --config deploy/fly.toml --app "${{ steps.target.outputs.app }}" --env ANERP_ENV="${{ steps.target.outputs.env }}"
+        # The build context is the repository root ("."): the project build needs pyproject.toml,
+        # README.md and src/. Without an explicit working directory flyctl would use deploy/ (the
+        # directory of fly.toml), find no Dockerfile there and generate its own pip-based one.
+        run: flyctl deploy . --remote-only --config deploy/fly.toml --dockerfile deploy/Dockerfile --app "${{ steps.target.outputs.app }}" --env ANERP_ENV="${{ steps.target.outputs.env }}"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       - name: Health check

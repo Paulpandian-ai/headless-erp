@@ -1,0 +1,24 @@
+# Build context for deploy/Dockerfile (context = repository root). README.md, src/, policies/,
+# migrations/, alembic.ini, pyproject.toml and uv.lock must stay included: the project build
+# (hatchling) reads README.md and src/.
+.git
+.github
+.devcontainer
+.venv
+.env
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.hypothesis
+__pycache__
+*.py[cod]
+*.db
+*.db-wal
+*.db-shm
+*.pem
+tests
+results
+deploy
+docs
+*.md
+!README.md

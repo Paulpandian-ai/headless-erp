@@ -2,6 +2,8 @@
 primary_region = "ams"
 
 [build]
+  # deploy.yml passes `--dockerfile deploy/Dockerfile` with the repository root as the build
+  # context; this value only matters when deploying by hand from inside deploy/.
   dockerfile = "Dockerfile"
 
 [deploy]
