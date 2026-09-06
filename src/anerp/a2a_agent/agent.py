@@ -46,8 +46,12 @@ class AnerpAgentExecutor(AgentExecutor):
         headers = getattr(context.call_context, "state", {}) or {}
         caller = meta.get("caller") or headers.get("caller") or "agent:unknown-delegator"
         return Principal(
-            subject="agent:anerp-finance", kind="agent", scopes=AGENT_SCOPES, token_id=None
-        ).model_copy(update={"_on_behalf_of": caller})
+            subject="agent:anerp-finance",
+            kind="agent",
+            scopes=AGENT_SCOPES,
+            token_id=None,
+            on_behalf_of=str(caller),
+        )
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         if context.current_task is None and context.message is not None:

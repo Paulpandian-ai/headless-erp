@@ -42,12 +42,21 @@ class Principal(BaseModel):
     kind: ActorKind
     scopes: list[str]
     token_id: str | None = None
+    on_behalf_of: str | None = None  # e.g. the delegating agent behind the A2A agent
 
     def has_scope(self, required: str) -> bool:
         return scope_matches(self.scopes, required)
 
     def to_actor(self, on_behalf_of: str | None = None) -> Actor:
-        return Actor(id=self.subject, kind=self.kind, on_behalf_of=on_behalf_of)
+        return Actor(
+            id=self.subject, kind=self.kind, on_behalf_of=on_behalf_of or self.on_behalf_of
+        )
+
+
+def local_principal(subject: str = "system:local") -> Principal:
+    """Explicit trust for in-process callers (seed, CLI, eval harness). Outside ANERP_ENV=test the
+    dispatcher refuses calls without a principal, so trust is always stated, never implied."""
+    return Principal(subject=subject, kind="admin", scopes=["admin:*"])
 
 
 def scope_matches(granted: list[str], required: str) -> bool:
