@@ -3,7 +3,7 @@
 - Read DESIGN.md fully before the first edit; treat §2.1, §6, §8.1, §16 and §20 as invariants.
 - Work phase by phase (§15). Before starting a phase, restate its definition of done; after
   finishing, run `uv run ruff check . && uv run mypy src && uv run pytest -q` and commit with
-  message `phase-N: <summary>`. Push to a branch and open a PR per phase; `main` deploys to `dev`.
+  message `phase-N: <summary>`. Push to a branch and open a PR per phase; `main` deploys to Railway.
 - Never write a secret to a tracked file. Secrets come from the environment only (§13). If a value
   looks like a token or key, stop.
 - Tests must run without network and without Postgres (SQLite in-memory fixture in

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +16,8 @@ from anerp.config import get_settings
 from anerp.core.hashing import canonical_json, hash_obj
 from anerp.core.ids import iso, utcnow
 from anerp.ledger.models import Receipt, ServerKey
+
+log = logging.getLogger("anerp.keys")
 
 
 def generate_private_key_pem() -> str:
@@ -46,6 +49,8 @@ class KeyRing:
         active = session.exec(select(ServerKey).where(ServerKey.retired_at.is_(None))).first()  # type: ignore[union-attr]
         settings = get_settings()
         if active is None:
+            # No key yet: use ANERP_SIGNING_KEY_PEM when set; otherwise generate one and persist
+            # its private material in server_key so it survives restarts (single-host POC).
             private_pem = settings.signing_key_pem or generate_private_key_pem()
             active = ServerKey(
                 public_key_pem=public_pem(private_pem),
@@ -53,6 +58,13 @@ class KeyRing:
             )
             session.add(active)
             session.flush()
+            log.warning(
+                "signing key %s created (%s)",
+                active.id,
+                "from ANERP_SIGNING_KEY_PEM"
+                if settings.signing_key_pem
+                else "generated and stored in server_key",
+            )
         if self._active_id != active.id:
             active_pem: str | None = active.private_key_pem or settings.signing_key_pem
             if active_pem is None:

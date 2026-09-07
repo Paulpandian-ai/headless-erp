@@ -152,11 +152,13 @@ paper's matrix.
 
 ## Deployment (cloud-only, non-AWS)
 
-Code lives in GitHub; the ERP runs on Fly.io/Railway/Render with hosted Postgres (Neon/Supabase).
-`deploy.yml` deploys `dev` on every push to `main` and `demo` on `v*` tags; migrations run in the
-release command (`anerp migrate`), never at request time. See [deploy/README.md](deploy/README.md)
-for the bootstrap sequence and the restore drill. Backups rely on the provider's point-in-time
-recovery; the `demo` database is never reset.
+Code lives in GitHub; the ERP runs on Railway with its Postgres plugin. `railway.json` builds
+`deploy/Dockerfile` and starts the service with `anerp migrate && anerp serve`, so migrations run
+before the server and never at request time. Railway's `DATABASE_URL`, `PORT` and
+`RAILWAY_PUBLIC_DOMAIN` are accepted when the `ANERP_*` variables are unset; a missing signing
+key is generated on first start and kept in the `server_key` table. See
+[deploy/README.md](deploy/README.md) for the variables, the bootstrap sequence and the restore
+drill. Backups rely on the provider's snapshots; the `demo` database is never reset.
 
 ## Boundaries (DESIGN.md §16)
 
