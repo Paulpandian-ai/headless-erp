@@ -52,19 +52,66 @@ def _query(name: str, **payload: Any) -> Any:
 
 @app.command()
 def serve(host: str = "0.0.0.0", port: int | None = None, reload: bool = False) -> None:
-    """Run the HTTP server (MCP at /mcp, A2A at /a2a, SSE at /events/stream)."""
+    """Run the HTTP server in the foreground (MCP at /mcp, A2A at /a2a, SSE at /events/stream).
+
+    Blocks until the server stops. Exits non-zero when startup fails (bad config, port in use).
+    """
+    raise typer.Exit(code=_serve(host, port, reload))
+
+
+def _serve(host: str, port: int | None, reload: bool = False) -> int:
+    import logging
+
     import uvicorn
 
     from anerp.config import get_settings
 
-    uvicorn.run(
-        "anerp.server:app",
-        factory=True,
-        host=host,
-        port=port or get_settings().port,
-        reload=reload,
-        log_level=get_settings().log_level.lower(),
-    )
+    settings = get_settings()
+    port = port or settings.port
+    logging.basicConfig(level=settings.log_level)
+    log = logging.getLogger("anerp.cli")
+    try:
+        if reload:  # dev only: uvicorn needs an import string to reload
+            log.info("anerp listening on %s:%s (reload)", host, port)
+            uvicorn.run(
+                "anerp.server:app",
+                factory=True,
+                host=host,
+                port=port,
+                reload=True,
+                log_level=settings.log_level.lower(),
+            )
+            return 0
+        from anerp.server import create_app
+
+        application = create_app()
+        log.info("anerp listening on %s:%s (env=%s)", host, port, settings.env)
+        typer.echo(f"anerp listening on {host}:{port}", err=True)
+        server = uvicorn.Server(
+            uvicorn.Config(application, host=host, port=port, log_level=settings.log_level.lower())
+        )
+        server.run()  # blocks; returns after a clean shutdown signal
+        if not server.started:
+            log.error("anerp did not start on %s:%s", host, port)
+            return 1
+        return 0
+    except Exception:
+        log.exception("anerp failed to start on %s:%s", host, port)
+        return 1
+
+
+@app.command()
+def start(host: str = "0.0.0.0", port: int | None = None) -> None:
+    """Container start step: apply migrations, then serve in the foreground (one process, no shell).
+
+    Use this as the Docker CMD / Railway start command so nothing depends on `a && b` chaining.
+    """
+    try:
+        migrate()
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"anerp: migration failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    raise typer.Exit(code=_serve(host, port))
 
 
 @app.command()

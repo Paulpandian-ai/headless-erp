@@ -29,7 +29,7 @@ uv run pytest -q                          # 39 tests, SQLite in memory, no netwo
 cp .env.example .env                      # local-to-the-codespace run only; never commit .env
 uv run anerp seed                         # chart of accounts, periods, 2 suppliers, 2 customers, 4 items
 uv run anerp token mint human:you --kind admin --scopes 'admin:*'   # prints the clear token once
-uv run anerp serve                        # MCP at /mcp, A2A at /a2a, SSE at /events/stream
+uv run anerp serve                        # foreground; MCP at /mcp, A2A at /a2a, SSE at /events/stream (`anerp start` = migrate + serve)
 ```
 
 Connect Claude Code to a running server (cloud or Codespace, forwarded port):
@@ -153,8 +153,8 @@ paper's matrix.
 ## Deployment (cloud-only, non-AWS)
 
 Code lives in GitHub; the ERP runs on Railway with its Postgres plugin. `railway.json` builds
-`deploy/Dockerfile` and starts the service with `anerp migrate && anerp serve`, so migrations run
-before the server and never at request time. Railway's `DATABASE_URL`, `PORT` and
+`deploy/Dockerfile` and starts the service with `anerp start`, which applies migrations and then
+serves in the foreground in one process. Railway's `DATABASE_URL`, `PORT` and
 `RAILWAY_PUBLIC_DOMAIN` are accepted when the `ANERP_*` variables are unset; a missing signing
 key is generated on first start and kept in the `server_key` table. See
 [deploy/README.md](deploy/README.md) for the variables, the bootstrap sequence and the restore

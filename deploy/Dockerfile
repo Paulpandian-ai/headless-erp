@@ -16,5 +16,6 @@ COPY alembic.ini ./
 RUN uv sync --frozen --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
-# Migrations run as the container's start step, then the server (Railway also sets PORT).
-CMD ["sh", "-c", "anerp migrate && anerp serve"]
+# `anerp start` applies migrations and then serves in the foreground in one process, so the
+# start step needs no shell chaining (Railway's startCommand replaces this CMD with the same).
+CMD ["anerp", "start"]

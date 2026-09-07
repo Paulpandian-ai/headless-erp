@@ -5,7 +5,7 @@
     "dockerfilePath": "deploy/Dockerfile"
   },
   "deploy": {
-    "startCommand": "anerp migrate && anerp serve",
+    "startCommand": "anerp start",
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",

@@ -1,8 +1,8 @@
 # Deployment (Railway)
 
 Non-AWS by policy (DESIGN.md §16). Target: Railway with its Postgres plugin. `railway.json` at the
-repository root builds `deploy/Dockerfile` and starts the service with `anerp migrate && anerp serve`,
-so migrations always run before the server and never at request time.
+repository root builds `deploy/Dockerfile` and starts the service with `anerp start`, which applies
+migrations and then serves in the foreground in one process; no shell chaining is involved.
 
 ## Variables
 
