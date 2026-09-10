@@ -68,6 +68,9 @@ async def test_unauthenticated_is_401(app):
             )
             assert r.status_code == 401 and r.json()["error"]["code"] == "UNAUTHORIZED"
             assert r.headers["www-authenticate"] == "Bearer"
+            # Same envelope as any other error, so a client renders 401 the way it renders
+            # POLICY_DENIED and can hand the id to explain_error (DESIGN.md §7.7).
+            assert r.json()["request_id"] and r.json()["error"]["retry_advice"]
             h = await http.get("/healthz")
             assert h.status_code == 200 and h.json()["status"] == "ok"
             keys = await http.get("/.well-known/anerp-keys.json")
@@ -266,3 +269,5 @@ async def test_events_stream(app):
                 "/events/stream", params={"max_events": 1}, headers={"Authorization": "Bearer nope"}
             )
             assert denied.status_code == 401
+            assert denied.json()["error"]["code"] == "UNAUTHORIZED"
+            assert denied.json()["request_id"]

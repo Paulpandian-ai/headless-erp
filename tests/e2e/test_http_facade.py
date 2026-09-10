@@ -69,6 +69,43 @@ async def test_unauthenticated_and_bad_token_are_401(app):
 
 
 @pytest.mark.anyio
+async def test_a_401_is_shaped_like_every_other_error_and_is_explainable(app):
+    """A rejected token gets the same envelope as a POLICY_DENIED, request_id included, and the
+    id resolves through explain_error once the caller holds a working token."""
+    async with app.router.lifespan_context(app):
+        async with _client(app, "nope") as http:
+            body = (await http.post("/api/query/get_trial_balance", json={})).json()
+
+        assert body["ok"] is False and body["mode"] == "query"
+        assert body["error"]["code"] == "UNAUTHORIZED"
+        assert body["error"]["retry_advice"] and body["error"]["details"] == {}
+        request_id = body["request_id"]
+        assert request_id
+
+        async with _client(app, app.state.agent_token) as http:
+            explained = (
+                await http.post("/api/query/explain_error", json={"request_id": request_id})
+            ).json()
+
+    assert explained["ok"], explained
+    entry = explained["result"]
+    assert entry["error_code"] == "UNAUTHORIZED"
+    # The log knows which tool the caller was reaching for, not just that someone was refused.
+    assert entry["tool"] == "get_trial_balance" and entry["mode"] == "query"
+    assert "UNAUTHORIZED" in entry["explanation"]
+
+
+@pytest.mark.anyio
+async def test_every_401_carries_a_distinct_request_id(app):
+    async with app.router.lifespan_context(app), _client(app, "nope") as http:
+        ids = {
+            (await http.post("/api/query/get_trial_balance", json={})).json()["request_id"]
+            for _ in range(3)
+        }
+    assert len(ids) == 3
+
+
+@pytest.mark.anyio
 async def test_query_matches_call_tool_exactly(app):
     """The facade adds nothing: same arguments in, same JSON out (request_id is per-call)."""
     token = app.state.agent_token
@@ -102,7 +139,7 @@ async def test_simulate_then_commit_then_replay(app):
     token = app.state.agent_token
     payload = {
         "supplier": "ACME",
-        "lines": [{"sku": "WIDGET-1", "qty": 5, "unit_cost": "10.00"}],
+        "lines": [{"sku": "HOSE-10M", "qty": 5, "unit_cost": "25.00"}],
     }
 
     async def po_count(http) -> int:
@@ -137,7 +174,7 @@ async def test_simulate_then_commit_then_replay(app):
         conflict = (
             await http.post(
                 "/api/commit/create_purchase_order",
-                json={**body, "lines": [{"sku": "WIDGET-1", "qty": 9, "unit_cost": "10.00"}]},
+                json={**body, "lines": [{"sku": "HOSE-10M", "qty": 9, "unit_cost": "25.00"}]},
             )
         ).json()
         assert conflict["error"]["code"] == "IDEMPOTENCY_CONFLICT"

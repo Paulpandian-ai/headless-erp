@@ -14,7 +14,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from anerp.config import get_settings
-from anerp.core.ids import iso, utcnow
+from anerp.core.errors import ErrorCode
+from anerp.core.ids import iso, new_ulid, utcnow
 
 
 @dataclass
@@ -138,6 +139,31 @@ class SimulationStore:
 
 request_log = RequestLog()
 simulations = SimulationStore()
+
+
+def log_auth_failure(*, tool: str, mode: str, message: str, actor_id: str = "anonymous") -> str:
+    """Record a rejected-at-the-door request and return its request_id.
+
+    The dispatcher logs every business error, which is what makes `explain_error(request_id)`
+    work. A 401 never reaches the dispatcher -- the transport answers first -- so it is logged
+    here instead, and the id goes into the 401 body like the id in any other error response.
+    """
+    request_id = new_ulid()
+    request_log.add(
+        RequestLogEntry(
+            request_id=request_id,
+            tool=tool,
+            mode=mode,
+            actor_id=actor_id,
+            actor_kind="unknown",
+            outcome="error",
+            started_at=utcnow(),
+            latency_ms=0.0,
+            error_code=ErrorCode.UNAUTHORIZED.value,
+            error_message=message,
+        )
+    )
+    return request_id
 
 
 def redact(payload: dict[str, Any], fields: frozenset[str] | None = None) -> dict[str, Any]:

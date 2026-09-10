@@ -300,13 +300,15 @@ Simulate: returns uniqueness check result and the projected record. Commit: pers
 | Tool | Returns |
 |---|---|
 | `get_document(type, id_or_number)` | full document with lines, status, linked docs, receipts |
-| `search_documents(type, filters, limit)` | paged list; filters by status, party, date range, number prefix |
+| `search_documents(type, filters, limit)` | paged list; filters by status, party, date range, number prefix; descending by `created_at`, or by `start_date` for `FiscalPeriod` (seeded periods share one `created_at`, so the calendar needs the field that actually orders it) |
+| `list_document_types(type?)` | the legal `type` values for `search_documents`/`get_document`, each with number prefix, supported filters and sort order — discoverable without provoking a `VALIDATION_ERROR` |
 | `list_open_items(kind, party_id?, overdue_only?)` | AP/AR open items with remaining amounts and due dates |
 | `get_account_balance(account_code, as_of_date?)` | debit/credit totals and net |
 | `get_trial_balance(period_code)` | all accounts, totals, `is_balanced` |
 | `get_ledger_entries(account_code, period_code)` | journal lines for an account |
 | `get_inventory(sku?)` | on-hand quantities |
 | `get_period(period_code)` | status and close-readiness checklist |
+| `get_current_period()` | the period bracketing today with its status and checklist, plus the nearest open period when today's is closed — how a client finds "now" |
 | `poll_events(after_seq, types?, limit)` | events with seq > after_seq |
 | `verify_receipt(receipt_id)` | recomputes hashes, verifies signature, returns `valid: bool` |
 | `describe_tool(name)` | the long-form description, examples, and compensating tool for one tool (helps agents plan) |
@@ -431,7 +433,7 @@ Default rules (POC):
 - Register every tool in §7 with the description template in §7.6 and annotations: query tools `readOnlyHint=true, idempotentHint=true`; write tools `destructiveHint=false` except `cancel_*`/`reverse_*`/`close_period` (`destructiveHint=true`); all commit tools `idempotentHint=true` (because of idempotency keys).
 - Resources: `anerp://chart-of-accounts`, `anerp://policies` (rendered YAML), `anerp://capabilities` (same as `list_capabilities`), `anerp://events/latest`.
 - Prompts (MCP prompts): `procure_to_pay_playbook`, `order_to_cash_playbook`, `period_close_checklist` — short, instruct simulate-before-commit and idempotency-key discipline.
-- **Auth (POC):** `Authorization: Bearer <token>`. Tokens live in the `ApiToken` table (hashed with SHA-256 + server pepper `ANERP_TOKEN_PEPPER`), minted via `mint_token` (§7.8), bootstrapped from `ANERP_BOOTSTRAP_ADMIN_TOKEN`. Lookup: hash → row → check `revoked_at`/`expires_at` → scopes. Missing/invalid → 401 `UNAUTHORIZED`; scope missing → 403 `FORBIDDEN`. Update `last_used_at` asynchronously (batched), not per request.
+- **Auth (POC):** `Authorization: Bearer <token>`. Tokens live in the `ApiToken` table (hashed with SHA-256 + server pepper `ANERP_TOKEN_PEPPER`), minted via `mint_token` (§7.8), bootstrapped from `ANERP_BOOTSTRAP_ADMIN_TOKEN`. Lookup: hash → row → check `revoked_at`/`expires_at` → scopes. Missing/invalid → 401 `UNAUTHORIZED`; scope missing → 403 `FORBIDDEN`. A 401 body has the same shape as every other error response (`ok`, `mode`, `request_id`, `error`) and the refusal is written to the request log, so `explain_error` answers for auth failures too. Update `last_used_at` asynchronously (batched), not per request.
 - **OAuth discovery is opt-in and off by default** (`ANERP_ADVERTISE_OAUTH=false`). Reason: Claude Code (and other clients) may ignore a configured static bearer header and fall back to OAuth discovery when a server advertises OAuth, leaving only `authenticate` tools visible. When the flag is on, serve `/.well-known/oauth-protected-resource` (RFC 9728) and return `WWW-Authenticate: Bearer resource_metadata="…"` **only on requests that carry no token**. Full OAuth 2.1 authorization server remains out of scope.
 - **Connecting Claude Code (any session, cloud or Codespace):** `claude mcp add --transport http anerp https://<host>/mcp --header "Authorization: Bearer $ANERP_ADMIN_TOKEN"`. The repo commits a project-level `.mcp.json` that references `${ANERP_ADMIN_TOKEN}` (expanded from the environment at runtime) so no literal token is ever in git. Verify with `/mcp` inside the session.
 - **Payload redaction for logs and `explain_error`:** fields named in `ANERP_REDACT_FIELDS` (default: `bank_account, tax_id, notes`) are replaced with `"[redacted]"` before logging; request bodies are never logged in full above `INFO`.

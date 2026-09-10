@@ -9,7 +9,9 @@ import mcp_types as types
 
 from anerp.core.dispatch import dispatch, run_query
 from anerp.core.envelope import Actor, Envelope, Principal
+from anerp.core.errors import RETRY_ADVICE, ErrorCode
 from anerp.core.registry import BaseTool, QueryTool, WriteTool, registry
+from anerp.core.requestlog import log_auth_failure
 
 ENVELOPE_FIELDS = ("mode", "idempotency_key", "simulation_id", "on_behalf_of")
 
@@ -114,12 +116,17 @@ def call_tool(
             },
         }
     if principal is None:
+        mode = "query" if isinstance(tool, QueryTool) else str(args.get("mode", "simulate"))
+        message = "no principal for this request"
         return {
             "ok": False,
+            "mode": mode,
+            "request_id": log_auth_failure(tool=name, mode=mode, message=message),
             "error": {
-                "code": "UNAUTHORIZED",
-                "message": "no principal for this request",
-                "retry_advice": "Send a bearer token.",
+                "code": ErrorCode.UNAUTHORIZED.value,
+                "message": message,
+                "details": {},
+                "retry_advice": RETRY_ADVICE[ErrorCode.UNAUTHORIZED],
             },
         }
     actor = principal.to_actor(on_behalf_of=args.pop("on_behalf_of", None))

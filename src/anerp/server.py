@@ -27,7 +27,7 @@ from anerp.facade import router as facade_router
 from anerp.ledger.models import PolicyVersion, ServerKey
 from anerp.ledger.receipts import keyring
 from anerp.mcp_server.app import build_http_app
-from anerp.mcp_server.auth import principal_from_token
+from anerp.mcp_server.auth import principal_from_token, unauthorized_body
 from anerp.policy.engine import get_engine
 
 log = logging.getLogger("anerp.server")
@@ -150,13 +150,11 @@ def create_app() -> FastAPI:
         )
         if principal is None or not principal.has_scope("events:read"):
             return JSONResponse(
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "bearer token with events:read required",
-                    },
-                },
+                unauthorized_body(
+                    tool="events_stream",
+                    mode="stream",
+                    message="the events stream needs a bearer token carrying events:read",
+                ),
                 status_code=401,
             )
         wanted = [t for t in (types or "").split(",") if t] or None

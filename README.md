@@ -59,7 +59,7 @@ receive_goods (agent: parks a goods-acceptance request) → accept_goods (human 
 | sales | `create_sales_order` (credit check), `ship_order` (stock check, COGS), `issue_customer_invoice`, `record_customer_payment`, `issue_credit_note`, `cancel_sales_order`, `reverse_shipment`, `reverse_customer_payment` |
 | finance | `post_journal_entry`, `reverse_journal_entry`, `close_period` (readiness checklist), `reopen_period` |
 | approvals | `list_pending_approvals` (kinds `po_approval`, `goods_acceptance`, `invoice_variance`), `request_approval`, `reject_approval` (+ `approve_purchase_order`, `accept_goods`, `reject_goods`; human tokens only) |
-| query | `get_document`, `search_documents`, `list_open_items`, `get_account_balance`, `get_trial_balance`, `get_ledger_entries`, `get_inventory`, `get_period`, `poll_events`, `verify_receipt`, `describe_tool`, `list_capabilities` |
+| query | `get_document`, `search_documents`, `list_document_types`, `list_open_items`, `get_account_balance`, `get_trial_balance`, `get_ledger_entries`, `get_inventory`, `get_period`, `get_current_period`, `poll_events`, `verify_receipt`, `describe_tool`, `list_capabilities` |
 | troubleshoot | `trace_document`, `explain_balance`, `explain_error`, `replay_simulate`, `find_duplicates`, `get_reconciliation`, `get_agent_activity`, `get_request_log` |
 | admin | `mint_token`, `revoke_token`, `list_tokens`, `update_policy`, `rotate_signing_key`, `reset_and_seed` (dev only), `get_system_status` |
 
