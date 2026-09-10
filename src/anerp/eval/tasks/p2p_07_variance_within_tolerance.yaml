@@ -1,10 +1,11 @@
 id: p2p_07_variance_within_tolerance
 module: procurement
 narrative: >
-  Order 10 WIDGET-1 from ACME at 50.00, receive them, post ACME's invoice ACME-V1 which charges
-  50.50 per unit, and pay it in full.
+  Order 10 VALVE-2IN from ACME at 50.00 and have them received. Post ACME's invoice ACME-V1, which
+  charges 50.50 per unit, and pay it in full.
 seed: baseline
 max_steps: 24
+human_loop: [goods_acceptance]
 goal_state:
   - {check: balance_delta, account: "5200", delta_cents: 500}
   - {check: balance_delta, account: "1000", delta_cents: -50500}

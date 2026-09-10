@@ -28,6 +28,7 @@ log = logging.getLogger("anerp.a2a")
 
 AGENT_SCOPES = [
     "procurement:write",
+    "procurement:receive",
     "sales:write",
     "finance:*",
     "masterdata:write",

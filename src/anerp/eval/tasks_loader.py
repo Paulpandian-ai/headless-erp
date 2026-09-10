@@ -48,6 +48,8 @@ def load_tasks(ids: list[str] | None = None, today: date | None = None) -> list[
         data.setdefault("traps", [])
         data.setdefault("setup", [])
         data.setdefault("repeat", 1)
+        data.setdefault("human_loop", [])
+        data.setdefault("acceptance", [])
         data.setdefault("max_steps", 20)
         tasks.append(data)
     return tasks

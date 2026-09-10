@@ -13,7 +13,7 @@ from anerp.admin.tokens import bootstrap_admin
 from anerp.core.dispatch import dispatch
 from anerp.core.envelope import Envelope
 from anerp.server import create_app
-from tests.conftest import ADMIN
+from tests.conftest import ADMIN, HUMAN
 
 BOOT = "anerp_test_bootstrap_admin_token"
 
@@ -31,7 +31,13 @@ def app(kernel):
             payload={
                 "subject": "agent:mcp-test",
                 "kind": "agent",
-                "scopes": ["procurement:write", "finance:ap:write", "finance:ap:pay", "*:read"],
+                "scopes": [
+                    "procurement:write",
+                    "procurement:receive",
+                    "finance:ap:write",
+                    "finance:ap:pay",
+                    "*:read",
+                ],
             },
         )
     )
@@ -115,7 +121,7 @@ async def test_mcp_p2p_over_http(app):
                 "create_purchase_order",
                 {
                     "supplier": "ACME",
-                    "lines": [{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.00"}],
+                    "lines": [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
                 },
             )
             body = sim.structured_content
@@ -129,7 +135,7 @@ async def test_mcp_p2p_over_http(app):
                     "idempotency_key": "http-p2p-po-1",
                     "simulation_id": body["simulation_id"],
                     "supplier": "ACME",
-                    "lines": [{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.00"}],
+                    "lines": [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
                 },
             )
             po = commit.structured_content
@@ -139,13 +145,29 @@ async def test_mcp_p2p_over_http(app):
                 and po["receipt"]["actor_id"] == "agent:mcp-test"
             )
             number = po["document"]["number"]
-            grn = (
+            parked = (
                 await session.call_tool(
                     "receive_goods",
                     {"mode": "commit", "idempotency_key": "http-p2p-grn-1", "po": number},
                 )
             ).structured_content
-            assert grn["ok"]
+            assert (
+                not parked["ok"]
+                and parked["error"]["details"]["approval_kind"] == "goods_acceptance"
+            )
+            accepted = dispatch(
+                Envelope(
+                    tool="accept_goods",
+                    mode="commit",
+                    idempotency_key="http-p2p-accept-1",
+                    actor=HUMAN,
+                    payload={
+                        "request_id": parked["error"]["details"]["approval_request_id"],
+                        "comment": "counted",
+                    },
+                )
+            )
+            assert accepted["ok"], accepted
             sinv = (
                 await session.call_tool(
                     "post_supplier_invoice",
@@ -154,7 +176,7 @@ async def test_mcp_p2p_over_http(app):
                         "idempotency_key": "http-p2p-sinv-1",
                         "po": number,
                         "supplier_reference": "H1",
-                        "lines": [{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.00"}],
+                        "lines": [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
                     },
                 )
             ).structured_content
@@ -190,7 +212,13 @@ async def test_mcp_p2p_over_http(app):
             trace = (
                 await session.call_tool("trace_document", {"id_or_number": number})
             ).structured_content
-            assert len(trace["result"]["nodes"]) == 4
+            assert [n["type"] for n in trace["result"]["nodes"]] == [
+                "PurchaseOrder",
+                "ApprovalRequest",
+                "GoodsReceipt",
+                "SupplierInvoice",
+                "SupplierPayment",
+            ]
 
             resources = await session.list_resources()
             assert {str(r.uri) for r in resources.resources} == {

@@ -259,7 +259,7 @@ class ApprovePurchaseOrder(WriteTool):
 
 
 # ======================================================================================
-# receive_goods
+# receive_goods / accept_goods / reject_goods
 # ======================================================================================
 class ReceiptLineInput(_Strict):
     sku: str
@@ -274,26 +274,171 @@ class ReceiveGoodsPayload(_Strict):
     posting_date: date | None = Field(default=None, description="Defaults to today")
 
 
+class CountedLine(_Strict):
+    sku: str
+    qty: int = Field(
+        ge=0, description="Good units accepted into stock (0 when nothing usable arrived)"
+    )
+    damaged_qty: int = Field(
+        default=0, ge=0, description="Units counted but damaged; recorded, not received"
+    )
+    note: str = ""
+
+
+def _receipt_projection(
+    ctx: ToolContext,
+    po: PurchaseOrder,
+    counted: list[CountedLine],
+    posting_date: date,
+    *,
+    expected: dict[str, int],
+    allow_over: bool,
+    acceptance_request_id: str | None = None,
+) -> Projection:
+    """Shared by receive_goods (expected == counted) and accept_goods (human counts)."""
+    lines = _po_lines(ctx, po)
+    by_sku = {line.sku: line for line in lines}
+    p = Projection()
+    grn = GoodsReceipt(
+        number=ctx.number_for("GoodsReceipt"),
+        po_id=po.id,
+        received_at=ctx.now,
+        acceptance_request_id=acceptance_request_id,
+    )
+    p.create("GoodsReceipt", grn, primary=True)
+    journal_lines: list[LineSpec] = []
+    grn_lines: list[dict[str, Any]] = []
+    received_after: dict[str, int] = {}
+    total = 0
+    discrepancies: list[str] = []
+    for c in counted:
+        line = by_sku.get(c.sku)
+        if line is None:
+            raise validation(f"sku {c.sku} is not on PO {po.number}", sku=c.sku)
+        outstanding = line.qty - line.received_qty
+        exp = expected.get(c.sku, outstanding)
+        if not allow_over:
+            ctx.require(
+                c.qty <= outstanding,
+                f"cannot receive {c.qty} of {c.sku}: only {outstanding} outstanding",
+                sku=c.sku,
+                outstanding=outstanding,
+            )
+        item = ctx.get(Item, line.item_id, "Item")
+        value = line.unit_cost_cents * c.qty
+        total += value
+        debit_acct = ACCT_INVENTORY if item.is_stocked else ACCT_OPEX
+        if c.qty > 0:
+            journal_lines.append(
+                LineSpec(
+                    debit_acct,
+                    debit_cents=value,
+                    description=f"GRN {c.qty} x {item.sku} @ {fmt(line.unit_cost_cents)}",
+                )
+            )
+            if item.is_stocked:
+                p.inventory.append(InventoryDelta(item, item.sku, c.qty))
+            received_after[line.id] = line.received_qty + c.qty
+            p.update("PurchaseOrderLine", line, {"received_qty": line.received_qty + c.qty})
+        short = max(exp - c.qty - c.damaged_qty, 0)
+        over = max(c.qty - exp, 0)
+        if short:
+            discrepancies.append(f"{c.sku}: {short} short")
+        if c.damaged_qty:
+            discrepancies.append(f"{c.sku}: {c.damaged_qty} damaged")
+        if over:
+            discrepancies.append(f"{c.sku}: {over} over-shipped")
+        grn_lines.append(
+            {
+                "po_line_id": line.id,
+                "sku": item.sku,
+                "expected_qty": exp,
+                "qty": c.qty,
+                "damaged_qty": c.damaged_qty,
+                "short_qty": short,
+                "over_qty": over,
+                "note": c.note,
+                "unit_cost_cents": line.unit_cost_cents,
+                "account": debit_acct,
+            }
+        )
+    ctx.require(
+        total > 0 or any(c.damaged_qty for c in counted), f"nothing counted on PO {po.number}"
+    )
+    grn.lines = grn_lines
+    grn.total_cents = total
+    if total > 0:
+        journal_lines.append(
+            LineSpec(ACCT_GRIR, credit_cents=total, description=f"GR/IR for PO {po.number}")
+        )
+        p.journal = JournalSpec(
+            posting_date,
+            f"Goods receipt {grn.number} for PO {po.number}",
+            "GoodsReceipt",
+            grn.id,
+            journal_lines,
+        )
+        grn.journal_entry_id = p.journal.id
+    new_status = _po_status_after(lines, received_after, {})
+    p.update("PurchaseOrder", po, {"status": new_status})
+    p.facts = {
+        "po": _po_facts(po, lines),
+        "grn": {"total_cents": total, "discrepancies": discrepancies},
+        **ctx.period_facts(posting_date),
+    }
+    p.extra = {"counted": grn_lines, "discrepancies": discrepancies}
+    p.approval_target, p.approval_target_type = po, "PurchaseOrder"
+    p.warnings.extend(f"discrepancy: {d}" for d in discrepancies)
+    p.events.append(
+        EventSpec(
+            "goods.received",
+            f"GRN {grn.number}: received {fmt(total)} against PO {po.number}; PO now {new_status}"
+            + (f"; discrepancies: {', '.join(discrepancies)}" if discrepancies else ""),
+        )
+    )
+    p.compensation = Compensation("reverse_goods_receipt", {"grn": grn.number})
+    return p
+
+
+def _outstanding_lines(ctx: ToolContext, po: PurchaseOrder) -> list[ReceiptLineInput]:
+    return [
+        ReceiptLineInput(sku=line.sku, qty=line.qty - line.received_qty)
+        for line in _po_lines(ctx, po)
+        if line.qty > line.received_qty
+    ]
+
+
 @tool
 class ReceiveGoods(WriteTool):
     name = "receive_goods"
     module = "procurement"
-    scope = "procurement:write"
-    purpose = "Record goods received against an approved purchase order; books inventory and GR/IR clearing at PO cost."
+    scope = "procurement:receive"
+    approval_kind = "goods_acceptance"
+    purpose = (
+        "Record goods received against an approved purchase order; books inventory and GR/IR clearing at "
+        "PO cost. Humans post it directly; an agent commit parks a goods_acceptance request that a human "
+        "resolves by counting the delivery (accept_goods / reject_goods)."
+    )
     preconditions = [
         "PO status approved or partially_received",
         "qty per line <= outstanding qty",
         "posting date in an open period",
+        "actor is a human token, else the commit parks a goods_acceptance ApprovalRequest (REQUIRES_APPROVAL)",
     ]
     effects = (
         "GoodsReceipt created; GL: Dr 1300 Inventory (stocked) or 5100 Operating expense (non-stocked) / "
         "Cr 1400 GR/IR at PO unit cost; inventory: on_hand += qty; PO lines received_qty updated and PO status "
-        "-> partially_received/received; events: goods.received."
+        "-> partially_received/received; events: goods.received. Agent commit: ApprovalRequest(kind=goods_acceptance) "
+        "holding this projection; events: approval.requested."
     )
     compensating_tool = "reverse_goods_receipt"
     compensating_when = "while the receipt is not yet invoiced and stock is still on hand"
-    common_errors = ["PRECONDITION_FAILED for wrong status or over-receipt", "PERIOD_CLOSED"]
-    emits = ["goods.received"]
+    common_errors = [
+        "REQUIRES_APPROVAL for agent tokens (details.approval_request_id; hand off to the warehouse)",
+        "PRECONDITION_FAILED for wrong status or over-receipt",
+        "PERIOD_CLOSED",
+    ]
+    emits = ["goods.received", "approval.requested"]
     payload_model = ReceiveGoodsPayload
 
     def project(self, ctx: ToolContext, payload: ReceiveGoodsPayload) -> Projection:
@@ -304,85 +449,179 @@ class ReceiveGoods(WriteTool):
             status=po.status,
         )
         posting_date = payload.posting_date or _today()
-        lines = _po_lines(ctx, po)
-        by_sku = {line.sku: line for line in lines}
-        requested = payload.lines or [
-            ReceiptLineInput(sku=line.sku, qty=line.qty - line.received_qty)
-            for line in lines
-            if line.qty > line.received_qty
-        ]
+        requested = payload.lines or _outstanding_lines(ctx, po)
         ctx.require(bool(requested), f"PO {po.number} has nothing outstanding to receive")
-        p = Projection()
-        grn = GoodsReceipt(number=ctx.number_for("GoodsReceipt"), po_id=po.id, received_at=ctx.now)
-        p.create("GoodsReceipt", grn, primary=True)
-        journal_lines: list[LineSpec] = []
-        grn_lines: list[dict[str, Any]] = []
-        received_after: dict[str, int] = {}
-        total = 0
-        grir_total = 0
-        for req in requested:
-            line = by_sku.get(req.sku)
-            if line is None:
-                raise validation(f"sku {req.sku} is not on PO {po.number}", sku=req.sku)
-            outstanding = line.qty - line.received_qty
-            ctx.require(
-                req.qty <= outstanding,
-                f"cannot receive {req.qty} of {req.sku}: only {outstanding} outstanding",
-                sku=req.sku,
-                outstanding=outstanding,
-            )
-            item = ctx.get(Item, line.item_id, "Item")
-            value = line.unit_cost_cents * req.qty
-            total += value
-            grir_total += value
-            debit_acct = ACCT_INVENTORY if item.is_stocked else ACCT_OPEX
-            journal_lines.append(
-                LineSpec(
-                    debit_acct,
-                    debit_cents=value,
-                    description=f"GRN {req.qty} x {item.sku} @ {fmt(line.unit_cost_cents)}",
-                )
-            )
-            if item.is_stocked:
-                p.inventory.append(InventoryDelta(item, item.sku, req.qty))
-            received_after[line.id] = line.received_qty + req.qty
-            p.update("PurchaseOrderLine", line, {"received_qty": line.received_qty + req.qty})
-            grn_lines.append(
-                {
-                    "po_line_id": line.id,
-                    "sku": item.sku,
-                    "qty": req.qty,
-                    "unit_cost_cents": line.unit_cost_cents,
-                    "account": debit_acct,
-                }
-            )
-        journal_lines.append(
-            LineSpec(ACCT_GRIR, credit_cents=grir_total, description=f"GR/IR for PO {po.number}")
-        )
-        grn.lines = grn_lines
-        grn.total_cents = total
-        p.journal = JournalSpec(
+        counted = [CountedLine(sku=r.sku, qty=r.qty) for r in requested]
+        return _receipt_projection(
+            ctx,
+            po,
+            counted,
             posting_date,
-            f"Goods receipt {grn.number} for PO {po.number}",
-            "GoodsReceipt",
-            grn.id,
-            journal_lines,
+            expected={r.sku: r.qty for r in requested},
+            allow_over=False,
         )
-        grn.journal_entry_id = p.journal.id
-        new_status = _po_status_after(lines, received_after, {})
-        p.update("PurchaseOrder", po, {"status": new_status})
-        p.facts = {
-            "po": _po_facts(po, lines),
-            "grn": {"total_cents": total},
-            **ctx.period_facts(posting_date),
-        }
+
+
+class AcceptGoodsPayload(_Strict):
+    request_id: str = Field(description="Pending goods_acceptance ApprovalRequest id")
+    accepted_lines: list[CountedLine] | None = Field(
+        default=None,
+        description="What was counted per SKU: good qty accepted, damaged qty, note. Omit to accept the expected quantities.",
+    )
+    comment: str = ""
+    posting_date: date | None = None
+
+
+def _pending_acceptance(ctx: ToolContext, request_id: str) -> ApprovalRequest:
+    req = ctx.get(ApprovalRequest, request_id, "ApprovalRequest")
+    ctx.require(
+        req.kind == "goods_acceptance", f"request {req.id} is a {req.kind} request", kind=req.kind
+    )
+    ctx.require(req.status == "pending", f"request {req.id} is {req.status}", status=req.status)
+    return req
+
+
+def _expected_from_request(
+    ctx: ToolContext, req: ApprovalRequest, po: PurchaseOrder
+) -> dict[str, int]:
+    lines = (req.payload_json or {}).get("lines")
+    if lines:
+        return {str(line["sku"]): int(line["qty"]) for line in lines}
+    return {line.sku: line.qty for line in _outstanding_lines(ctx, po)}
+
+
+@tool
+class AcceptGoods(WriteTool):
+    name = "accept_goods"
+    module = "procurement"
+    scope = "procurement:receive"
+    purpose = (
+        "Human goods acceptance: post the goods receipt for a parked goods_acceptance request at the "
+        "quantities actually counted (short, damaged or over-shipped lines recorded as counted)."
+    )
+    preconditions = [
+        "request status pending and kind goods_acceptance",
+        "actor token kind human or admin",
+        "PO still approved or partially_received",
+        "posting date in an open period",
+    ]
+    effects = (
+        "GoodsReceipt created at the accepted quantities with expected/short/damaged/over per line; GL and "
+        "inventory as receive_goods; PO lines received_qty updated (over-shipments allowed); ApprovalRequest -> "
+        "approved; events: goods.received, goods.accepted."
+    )
+    compensating_tool = "reverse_goods_receipt"
+    compensating_when = "while the receipt is not yet invoiced and stock is still on hand"
+    common_errors = [
+        "POLICY_DENIED for agent tokens",
+        "PRECONDITION_FAILED when the request is not pending",
+        "PERIOD_CLOSED",
+    ]
+    emits = ["goods.received", "goods.accepted"]
+    payload_model = AcceptGoodsPayload
+
+    def project(self, ctx: ToolContext, payload: AcceptGoodsPayload) -> Projection:
+        req = _pending_acceptance(ctx, payload.request_id)
+        po = ctx.get(PurchaseOrder, req.document_id or "", "PurchaseOrder")
+        ctx.require(
+            po.status in ("approved", "partially_received"),
+            f"PO {po.number} is {po.status}; goods can only be accepted against approved or partially_received POs",
+            status=po.status,
+        )
+        expected = _expected_from_request(ctx, req, po)
+        counted = payload.accepted_lines or [
+            CountedLine(sku=sku, qty=qty) for sku, qty in expected.items()
+        ]
+        posting_date = payload.posting_date or _today()
+        p = _receipt_projection(
+            ctx,
+            po,
+            counted,
+            posting_date,
+            expected=expected,
+            allow_over=True,
+            acceptance_request_id=req.id,
+        )
+        p.update(
+            "ApprovalRequest",
+            req,
+            {
+                "status": "approved",
+                "decided_by": ctx.actor.id,
+                "decided_at": ctx.now,
+                "decision_comment": payload.comment,
+            },
+        )
+        p.facts["acceptance"] = {"request_id": req.id, "requested_by": req.requested_by}
         p.events.append(
             EventSpec(
-                "goods.received",
-                f"GRN {grn.number}: received {fmt(total)} against PO {po.number}; PO now {new_status}",
+                "goods.accepted",
+                f"Delivery for PO {po.number} accepted by {ctx.actor.id}: {payload.comment or 'as counted'}",
+                "ApprovalRequest",
+                req,
+                {
+                    "approval_request_id": req.id,
+                    "for_document_id": po.id,
+                    "requested_by": req.requested_by,
+                },
             )
         )
-        p.compensation = Compensation("reverse_goods_receipt", {"grn": grn.number})
+        return p
+
+
+class RejectGoodsPayload(_Strict):
+    request_id: str
+    reason: str = Field(min_length=1)
+
+
+@tool
+class RejectGoods(WriteTool):
+    name = "reject_goods"
+    module = "procurement"
+    scope = "procurement:receive"
+    purpose = "Human goods rejection: close a parked goods_acceptance request without posting a receipt (delivery refused or never arrived)."
+    preconditions = [
+        "request status pending and kind goods_acceptance",
+        "actor token kind human or admin",
+    ]
+    effects = "ApprovalRequest -> rejected; PO unchanged; GL: none; events: goods.rejected."
+    compensating_tool = None
+    common_errors = [
+        "POLICY_DENIED for agent tokens",
+        "PRECONDITION_FAILED when the request is not pending",
+    ]
+    emits = ["goods.rejected"]
+    payload_model = RejectGoodsPayload
+    annotations = Annotations(destructive=True)
+
+    def project(self, ctx: ToolContext, payload: RejectGoodsPayload) -> Projection:
+        req = _pending_acceptance(ctx, payload.request_id)
+        p = Projection()
+        p.update(
+            "ApprovalRequest",
+            req,
+            {
+                "status": "rejected",
+                "decided_by": ctx.actor.id,
+                "decided_at": ctx.now,
+                "decision_comment": payload.reason,
+            },
+            primary=True,
+        )
+        p.facts = {"acceptance": {"request_id": req.id, "requested_by": req.requested_by}}
+        p.events.append(
+            EventSpec(
+                "goods.rejected",
+                f"Delivery for {req.document_number or req.document_id} rejected by {ctx.actor.id}: {payload.reason}",
+                "ApprovalRequest",
+                req,
+                {
+                    "approval_request_id": req.id,
+                    "for_document_id": req.document_id,
+                    "requested_by": req.requested_by,
+                },
+            )
+        )
         return p
 
 
@@ -411,7 +650,7 @@ class PostSupplierInvoice(WriteTool):
     name = "post_supplier_invoice"
     module = "procurement"
     scope = "finance:ap:write"
-    purpose = "Post a supplier invoice against a purchase order with three-way match (PO price/qty vs received qty vs invoice)."
+    purpose = "Post a supplier invoice against a purchase order with three-way match (PO price/qty vs accepted receipt qty vs invoice)."
     preconditions = [
         "PO has goods receipts",
         "invoice qty per line <= received qty minus already invoiced qty",
@@ -427,12 +666,14 @@ class PostSupplierInvoice(WriteTool):
     compensating_tool = "reverse_supplier_invoice"
     compensating_when = "while unpaid and the period is open"
     common_errors = [
-        "MATCH_VARIANCE_EXCEEDED (qty over receipt or price outside tolerance)",
+        "MATCH_VARIANCE_EXCEEDED (qty over accepted receipt or price outside tolerance): an invoice_variance ApprovalRequest is parked for a human (details.approval_request_id)",
         "PERIOD_CLOSED",
         "PRECONDITION_FAILED when nothing was received",
     ]
-    emits = ["supplier_invoice.posted"]
+    emits = ["supplier_invoice.posted", "approval.requested"]
     payload_model = PostSupplierInvoicePayload
+    approval_kind = "invoice_variance"
+    park_on_deny = {"MATCH_VARIANCE_EXCEEDED": "invoice_variance"}
 
     def project(self, ctx: ToolContext, payload: PostSupplierInvoicePayload) -> Projection:
         po = ctx.get_by_ref(PurchaseOrder, payload.po, "PurchaseOrder")

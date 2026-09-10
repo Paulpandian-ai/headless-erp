@@ -89,7 +89,10 @@ discovery is off by default because clients that see it may abandon a configured
 
 ## Human in the loop
 
-`create_purchase_order` above the threshold persists a `draft` PO and an `ApprovalRequest`
-(events `purchase_order.created`, `approval.requested`). Approval tools reject agent tokens and
-self-approval. The A2A agent returns `input-required` with the request id and resumes when the
-task receives another message after a human approves.
+`ApprovalRequest.kind` names the decision. `create_purchase_order` above the threshold persists a
+`draft` PO and a `po_approval` request. An agent commit of `receive_goods` posts nothing and parks
+a `goods_acceptance` request holding the projection and payload; `accept_goods` (human) posts the
+receipt at the counted quantities and `reject_goods` closes it. A refused `post_supplier_invoice`
+parks an `invoice_variance` request while still returning `MATCH_VARIANCE_EXCEEDED`. Approval
+tools reject agent tokens and self-approval. The A2A agent returns `input-required` with the
+request id and resumes when the task receives another message after the human acts.

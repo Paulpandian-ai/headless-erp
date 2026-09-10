@@ -71,7 +71,7 @@ class CreateSupplier(WriteTool):
 
 class CreateCustomerPayload(_Strict):
     code: str = Field(
-        min_length=1, max_length=32, description="Short unique customer code, e.g. GLOBEX"
+        min_length=1, max_length=32, description="Short unique customer code, e.g. NORTH"
     )
     name: str = Field(min_length=1)
     credit_limit: Money = Field(
@@ -112,7 +112,7 @@ class CreateCustomer(WriteTool):
 
 class CreateItemPayload(_Strict):
     sku: str = Field(
-        min_length=1, max_length=64, description="Unique stock keeping unit, e.g. WIDGET-1"
+        min_length=1, max_length=64, description="Unique stock keeping unit, e.g. VALVE-2IN"
     )
     name: str = Field(min_length=1)
     standard_cost: Money = Field(

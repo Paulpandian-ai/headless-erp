@@ -1,15 +1,15 @@
 id: o2c_01_simple
 module: sales
 narrative: >
-  GLOBEX orders 5 WIDGET-1 at the list price. Create the order, ship it, invoice it, and record
+  NORTH orders 5 VALVE-2IN at the list price. Create the order, ship it, invoice it, and record
   their payment in full.
 seed: baseline
 max_steps: 20
 goal_state:
-  - {check: count, type: SalesOrder, where: {party: GLOBEX, status: invoiced}, expected: 1}
-  - {check: inventory_delta, sku: WIDGET-1, delta: -5}
+  - {check: count, type: SalesOrder, where: {party: NORTH, status: invoiced}, expected: 1}
+  - {check: inventory_delta, sku: VALVE-2IN, delta: -5}
   - {check: balance_delta, account: "4000", delta_cents: -40000}
   - {check: balance_delta, account: "5000", delta_cents: 25000}
   - {check: balance_delta, account: "1000", delta_cents: 40000}
-  - {check: open_items, kind: ar, party: GLOBEX, total_remaining_cents: 0}
+  - {check: open_items, kind: ar, party: NORTH, total_remaining_cents: 0}
   - {check: tb_balanced}

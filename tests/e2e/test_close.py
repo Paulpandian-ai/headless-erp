@@ -26,7 +26,7 @@ def test_close_and_reopen(kernel, agent: Client) -> None:
         lines=[{"account": "5100", "debit": "10.00"}, {"account": "1000", "credit": "10.00"}],
     )
     assert sim_je["commit_would_fail_with"] == "PERIOD_CLOSED"
-    so = agent.ok("create_sales_order", customer="GLOBEX", lines=[{"sku": "BOLT-3", "qty": 1}])
+    so = agent.ok("create_sales_order", customer="NORTH", lines=[{"sku": "FLANGE-4", "qty": 1}])
     assert (
         agent.commit("ship_order", so=so["document"]["number"])["error"]["code"] == "PERIOD_CLOSED"
     )
