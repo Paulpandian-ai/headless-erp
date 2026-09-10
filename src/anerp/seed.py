@@ -32,6 +32,8 @@ SEED_ACTOR = "system:seed"
 
 SEED_YEARS = (2025, 2026, 2027)
 CLOSED_PERIOD = "2026-08"  # the baseline fixture keeps 2026-08 closed and 2026-09 open
+OPEN_PERIOD = "2026-09"
+OPENING_DATE = "2026-09-01"  # opening balances are dated in the open period
 
 
 def seed_kernel(session: Session, year: int | None = None) -> dict[str, int]:
@@ -52,12 +54,13 @@ def seed_kernel(session: Session, year: int | None = None) -> dict[str, int]:
 def _call(
     session: Session, tool: str, payload: dict[str, Any], actor_id: str, key: str
 ) -> dict[str, Any]:
-    """Dispatch a commit in-process. The seed shares the caller's engine, not its session."""
+    """Dispatch a commit inside the caller's transaction (session-bound dispatch), so a fixture
+    is applied atomically: `anerp seed` commits once at the end and `reset_and_seed` ends its
+    single transaction with the system.reset event and receipt."""
     from anerp.core.dispatch import dispatch
     from anerp.core.envelope import Actor, Envelope, local_principal
 
-    # Flush the caller's transaction so dispatch (own session) can see kernel rows on SQLite.
-    session.commit()
+    session.flush()
     result = dispatch(
         Envelope(
             tool=tool,
@@ -67,6 +70,7 @@ def _call(
             payload=payload,
         ),
         principal=local_principal(actor_id),
+        session=session,
     )
     if not result.get("ok"):
         raise RuntimeError(f"seed step {tool} failed: {result.get('error')}")
@@ -89,11 +93,12 @@ ITEMS = (  # sku, name, standard cost, list price, opening on-hand
 def seed_fixture(
     session: Session, name: str = "baseline", actor_id: str = SEED_ACTOR
 ) -> dict[str, Any]:
-    """`empty`: chart of accounts and periods only. `baseline`: the demo master data, opening capital,
-    opening stock received through the dispatcher, and period 2026-08 closed."""
+    """`empty`: chart of accounts and periods only. `baseline`: the demo master data, opening capital
+    and opening stock as opening journal entries (through the dispatcher), and period 2026-08 closed.
+    Runs inside the caller's transaction: all or nothing."""
     counts = seed_kernel(session)
     if name == "empty":
-        session.commit()
+        session.flush()
         return counts
     if name != "baseline":
         raise ValueError(f"unknown fixture {name}")
@@ -116,7 +121,9 @@ def seed_fixture(
             f"customer:{code}",
         )
         steps += 1
-    for sku, iname, cost, price, _on_hand in ITEMS:
+    for sku, iname, cost, price, on_hand in ITEMS:
+        # Opening stock is an opening balance: create_item posts Dr 1300 Inventory / Cr 3000 Equity
+        # at standard cost and sets on_hand, so no purchase order or GR/IR balance is left behind.
         _call(
             session,
             "create_item",
@@ -126,6 +133,8 @@ def seed_fixture(
                 "standard_cost": cost,
                 "list_price": price,
                 "is_stocked": True,
+                "opening_qty": on_hand,
+                "opening_date": OPENING_DATE,
             },
             actor_id,
             f"item:{sku}",
@@ -136,6 +145,7 @@ def seed_fixture(
         "post_journal_entry",
         {
             "memo": "Opening capital",
+            "posting_date": OPENING_DATE,
             "lines": [
                 {"account": "1000", "debit": "250000.00"},
                 {"account": "3000", "credit": "250000.00"},
@@ -144,32 +154,7 @@ def seed_fixture(
         actor_id,
         "opening-capital",
     )
-    steps += 1
-    stock_lines = [
-        {"sku": sku, "qty": on_hand, "unit_cost": cost}
-        for sku, _n, cost, _p, on_hand in ITEMS
-        if on_hand > 0
-    ]
-    po = _call(
-        session,
-        "create_purchase_order",
-        {"supplier": "ACME", "lines": stock_lines, "memo": "Opening stock"},
-        actor_id,
-        "opening-po",
-    )
-    po_number = po["document"]["number"]
-    _call(
-        session, "receive_goods", {"po": po_number}, actor_id, "opening-grn"
-    )  # admin actor: posts directly
-    inv = _call(
-        session,
-        "post_supplier_invoice",
-        {"po": po_number, "supplier_reference": "ACME-0001", "lines": stock_lines},
-        actor_id,
-        "opening-sinv",
-    )
-    _call(session, "pay_supplier", {"invoice": inv["document"]["number"]}, actor_id, "opening-pay")
     _call(session, "close_period", {"period": CLOSED_PERIOD}, actor_id, f"close:{CLOSED_PERIOD}")
-    steps += 5
+    steps += 2
     counts["dispatched_steps"] = steps
     return counts

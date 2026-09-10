@@ -684,8 +684,13 @@ no GL effect for the close-readiness blocker.)
 | Item | HOSE-10M | Reinforced hose 10 m | | 25.00 | 40.00 | 40 |
 | Item | FLANGE-4 | Flange 4 bolt | | 15.00 | 24.00 | 100 |
 
-Periods 2025–2027 exist; **2026-08 is closed**, 2026-09 is open. Opening capital 250,000.00; opening stock
-arrives through the dispatcher (PO-000001 from ACME, received by the seed's admin actor, invoiced and paid).
+Periods 2025–2027 exist; **2026-08 is closed**, 2026-09 is open. Opening capital 250,000.00 and opening stock
+are opening journal entries dated 2026-09-01 through the dispatcher (`create_item` with `opening_qty` posts
+Dr 1300 Inventory / Cr 3000 Owner's equity at standard cost, 2,750.00 in total), so no purchase order, goods
+receipt or GR/IR balance is left behind. The fixture is applied atomically: `anerp seed` commits once at the
+end and `reset_and_seed` is one transaction ending with the `system.reset` event and receipt (a failure
+rolls back the wipe as well). Document numbers are allocated during projection in commit mode, so every
+derived value (memos, open-item references, event summaries, compensating hints) carries the final number.
 
 **A.8 Dispatcher generalisation.** A write tool declares `approval_kind` (the kind parked on
 `requires_approval`) and `park_on_deny` (policy error codes that park a request of a kind while the error is

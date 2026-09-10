@@ -125,11 +125,7 @@ class _Runner:
     # ---- state-driven procure-to-pay ------------------------------------------------------
     def _find_po(self, supplier: str, total_cents: int) -> dict[str, Any] | None:
         for po in self.query("search_documents", type="PurchaseOrder", party=supplier)["items"]:
-            if (
-                po["total_cents"] == total_cents
-                and po["status"] != "cancelled"
-                and po["number"] != "PO-000001"
-            ):
+            if po["total_cents"] == total_cents and po["status"] != "cancelled":
                 return po
         return None
 

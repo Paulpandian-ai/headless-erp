@@ -11,6 +11,7 @@ params:
 
 groups:
   posting_tools:
+    - create_item
     - receive_goods
     - post_supplier_invoice
     - pay_supplier
