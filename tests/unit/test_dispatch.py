@@ -66,9 +66,7 @@ def test_idempotent_replay_and_conflict(kernel, agent: Client) -> None:
     assert first["status"] == "applied" and second["status"] == "replayed"
     assert first["receipt"] == second["receipt"]
     assert first["document"] == second["document"]
-    assert (
-        agent.query("search_documents", type="PurchaseOrder", party="ACME")["count"] == 2
-    )  # seed PO + this one
+    assert agent.query("search_documents", type="PurchaseOrder", party="ACME")["count"] == 1
     conflict = agent.commit(
         "create_purchase_order",
         key="retry-storm-1",
@@ -161,8 +159,8 @@ def test_scope_enforcement(kernel) -> None:
         principal=writer,
     )
     assert (
-        approve["error"]["code"] == "PRECONDITION_FAILED"
-    )  # scope ok (procurement:*), PO already invoiced
+        approve["error"]["code"] == "NOT_FOUND"
+    )  # scope ok (procurement:*); the seed has no purchase orders
     admin = Principal(subject="admin:x", kind="admin", scopes=["admin:*"])
     assert run_query("list_tokens", {}, AGENT, principal=admin)["ok"]
 
@@ -191,7 +189,7 @@ def test_replay_simulate(kernel, agent: Client) -> None:
         not replay2["current_simulation"]["ok"]
         and replay2["current_simulation"]["error"]["code"] == "PRECONDITION_FAILED"
     )
-    assert agent.query("search_documents", type="PurchaseOrder")["count"] == 2
+    assert agent.query("search_documents", type="PurchaseOrder")["count"] == 1
 
 
 def test_requires_approval_without_draft_is_deduplicated_receipted_and_idempotent(

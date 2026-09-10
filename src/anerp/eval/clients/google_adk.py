@@ -40,7 +40,7 @@ class GoogleADKClient:
                     url=surface.url.rstrip("/") + "/mcp",
                     headers={"Authorization": f"Bearer {surface.token}"},
                 )
-            )
+            )  # type: ignore[no-untyped-call]
             agent = LlmAgent(
                 name="ops_assistant",
                 model=os.environ.get("ANERP_LLM_MODEL", "gemini-2.5-pro"),

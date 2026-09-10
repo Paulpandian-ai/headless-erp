@@ -256,12 +256,12 @@ async def test_events_stream(app):
         ) as http:
             r = await http.get(
                 "/events/stream",
-                params={"after_seq": 0, "types": "purchase_order.created", "max_events": 1},
+                params={"after_seq": 0, "types": "item.created", "max_events": 1},
             )
             assert r.status_code == 200
             lines = [line for line in r.text.splitlines() if line.startswith("data:")]
             got = json.loads(lines[0][5:])
-            assert got["type"] == "purchase_order.created" and got["seq"] > 0
+            assert got["type"] == "item.created" and got["seq"] > 0
             denied = await http.get(
                 "/events/stream", params={"max_events": 1}, headers={"Authorization": "Bearer nope"}
             )

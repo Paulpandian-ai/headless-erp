@@ -40,8 +40,11 @@
 ## Conventions that are easy to miss
 
 - Money: payloads take `Decimal` strings (`"50.00"`); storage and responses use integer cents.
-- Numbers (`PO-000123`) are allocated inside the commit transaction; simulate shows
-  `PO-000124 (projected)`.
+- Numbers (`PO-000123`) are allocated by `ctx.number_for` during projection in commit mode (inside
+  the transaction, rolled back on failure); simulate shows `PO-000124 (projected)`. Never copy a
+  number into another column or string before that: Postgres enforces `VARCHAR(16)`.
+- `dispatch(..., session=s)` runs a commit inside the caller's transaction (no commit, no rollback,
+  no after_commit hooks); the seed uses it so `anerp seed` and `reset_and_seed` are atomic.
 - `Projection.on_requires_approval` lets a tool persist a pending version (PO `draft`) when policy
   says `requires_approval`; tools without it get `REQUIRES_APPROVAL` and only an `ApprovalRequest`
   (of the tool's `approval_kind`, pointing at `Projection.approval_target`) is written. A tool's
@@ -50,7 +53,8 @@
   `goods_acceptance` request; `accept_goods` / `reject_goods` resolve it (scope
   `procurement:receive`, `human_approval_only`). Three-way match uses accepted quantities.
 - Baseline seed (DESIGN.md Amendment A): ACME/BOLT, NORTH/HARB, PUMP-SM/VALVE-2IN/HOSE-10M/FLANGE-4
-  with on-hand 0/5/40/100, period 2026-08 closed.
+  with on-hand 0/5/40/100 as opening entries (`create_item` `opening_qty`), period 2026-08 closed,
+  no purchase order or GR/IR balance.
 - The request log and simulation store are in-process memory, so simulate is provably zero-write.
 - `ctx.get`/`ctx.get_by_ref` record touched rows; their `state_version`s feed the receipt hashes and
   the `STALE_SIMULATION` check.
