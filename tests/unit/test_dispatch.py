@@ -38,19 +38,19 @@ def test_simulate_writes_nothing(kernel, agent: Client) -> None:
         r = agent.simulate(
             "create_purchase_order",
             supplier="ACME",
-            lines=[{"sku": "WIDGET-1", "qty": 1, "unit_cost": "1.00"}],
+            lines=[{"sku": "VALVE-2IN", "qty": 1, "unit_cost": "1.00"}],
         )
         assert r["ok"] and r["simulation_id"]
     r = agent.simulate(
         "create_purchase_order",
         supplier="ACME",
-        lines=[{"sku": "GADGET-2", "qty": 200, "unit_cost": "120.00"}],
+        lines=[{"sku": "PUMP-SM", "qty": 30, "unit_cost": "400.00"}],
     )
     assert r["policy"]["decision"] == "requires_approval"
     r = agent.simulate(
         "create_purchase_order",
         supplier="NOPE",
-        lines=[{"sku": "WIDGET-1", "qty": 1, "unit_cost": "1.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 1, "unit_cost": "1.00"}],
     )
     assert not r["ok"] and r["error"]["code"] == "NOT_FOUND"
     kernel.expire_all()
@@ -60,55 +60,53 @@ def test_simulate_writes_nothing(kernel, agent: Client) -> None:
 
 
 def test_idempotent_replay_and_conflict(kernel, agent: Client) -> None:
-    payload = {"supplier": "ACME", "lines": [{"sku": "WIDGET-1", "qty": 2, "unit_cost": "50.00"}]}
+    payload = {"supplier": "ACME", "lines": [{"sku": "VALVE-2IN", "qty": 2, "unit_cost": "50.00"}]}
     first = agent.commit("create_purchase_order", key="retry-storm-1", **payload)
     second = agent.commit("create_purchase_order", key="retry-storm-1", **payload)
     assert first["status"] == "applied" and second["status"] == "replayed"
     assert first["receipt"] == second["receipt"]
     assert first["document"] == second["document"]
-    assert (
-        agent.query("search_documents", type="PurchaseOrder", party="ACME")["count"] == 2
-    )  # seed PO + this one
+    assert agent.query("search_documents", type="PurchaseOrder", party="ACME")["count"] == 1
     conflict = agent.commit(
         "create_purchase_order",
         key="retry-storm-1",
         supplier="ACME",
-        lines=[{"sku": "WIDGET-1", "qty": 3, "unit_cost": "50.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 3, "unit_cost": "50.00"}],
     )
     assert conflict["error"]["code"] == "IDEMPOTENCY_CONFLICT"
     dups = agent.query("find_duplicates", document_type="PurchaseOrder", window_minutes=5)
     assert dups["count"] == 0
 
 
-def test_stale_simulation(kernel, agent: Client) -> None:
+def test_stale_simulation(kernel, agent: Client, human: Client) -> None:
     po = agent.ok(
         "create_purchase_order",
         supplier="ACME",
-        lines=[{"sku": "WIDGET-1", "qty": 2, "unit_cost": "50.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 2, "unit_cost": "50.00"}],
     )
     number = po["document"]["number"]
-    sim = agent.simulate("receive_goods", po=number, lines=[{"sku": "WIDGET-1", "qty": 1}])
+    sim = human.simulate("receive_goods", po=number, lines=[{"sku": "VALVE-2IN", "qty": 1}])
     assert sim["ok"]
-    agent.ok("receive_goods", po=number, lines=[{"sku": "WIDGET-1", "qty": 1}])
-    stale = agent.commit(
+    human.ok("receive_goods", po=number, lines=[{"sku": "VALVE-2IN", "qty": 1}])
+    stale = human.commit(
         "receive_goods",
         simulation_id=sim["simulation_id"],
         po=number,
-        lines=[{"sku": "WIDGET-1", "qty": 1}],
+        lines=[{"sku": "VALVE-2IN", "qty": 1}],
     )
     assert stale["error"]["code"] == "STALE_SIMULATION"
     assert stale["error"]["details"]["changed"]
-    unknown = agent.commit(
-        "receive_goods", simulation_id="01NOPE", po=number, lines=[{"sku": "WIDGET-1", "qty": 1}]
+    unknown = human.commit(
+        "receive_goods", simulation_id="01NOPE", po=number, lines=[{"sku": "VALVE-2IN", "qty": 1}]
     )
     assert unknown["error"]["code"] == "STALE_SIMULATION"
 
-    fresh = agent.simulate("receive_goods", po=number, lines=[{"sku": "WIDGET-1", "qty": 1}])
-    assert agent.commit(
+    fresh = human.simulate("receive_goods", po=number, lines=[{"sku": "VALVE-2IN", "qty": 1}])
+    assert human.commit(
         "receive_goods",
         simulation_id=fresh["simulation_id"],
         po=number,
-        lines=[{"sku": "WIDGET-1", "qty": 1}],
+        lines=[{"sku": "VALVE-2IN", "qty": 1}],
     )["ok"]
 
 
@@ -161,8 +159,8 @@ def test_scope_enforcement(kernel) -> None:
         principal=writer,
     )
     assert (
-        approve["error"]["code"] == "PRECONDITION_FAILED"
-    )  # scope ok (procurement:*), PO already invoiced
+        approve["error"]["code"] == "NOT_FOUND"
+    )  # scope ok (procurement:*); the seed has no purchase orders
     admin = Principal(subject="admin:x", kind="admin", scopes=["admin:*"])
     assert run_query("list_tokens", {}, AGENT, principal=admin)["ok"]
 
@@ -181,7 +179,7 @@ def test_replay_simulate(kernel, agent: Client) -> None:
     po = agent.ok(
         "create_purchase_order",
         supplier="ACME",
-        lines=[{"sku": "WIDGET-1", "qty": 2, "unit_cost": "50.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 2, "unit_cost": "50.00"}],
     )
     replay = agent.query("replay_simulate", receipt_id=po["receipt"]["id"])
     assert replay["current_simulation"]["ok"] and replay["identical"]
@@ -191,7 +189,7 @@ def test_replay_simulate(kernel, agent: Client) -> None:
         not replay2["current_simulation"]["ok"]
         and replay2["current_simulation"]["error"]["code"] == "PRECONDITION_FAILED"
     )
-    assert agent.query("search_documents", type="PurchaseOrder")["count"] == 2
+    assert agent.query("search_documents", type="PurchaseOrder")["count"] == 1
 
 
 def test_requires_approval_without_draft_is_deduplicated_receipted_and_idempotent(
@@ -244,6 +242,10 @@ def test_requires_approval_without_draft_is_deduplicated_receipted_and_idempoten
     pending = human.query("list_pending_approvals")
     assert pending["count"] == 1 and pending["pending"][0]["document_id"] is None
     assert (
+        pending["pending"][0]["kind"] == "po_approval"
+        and pending["pending"][0]["payload"]["memo"] == "big accrual"
+    )
+    assert (
         pending["pending"][0]["projected_effects"]["journal_entry"]["total_debit_cents"] == 500000
     )
     # nothing of the business projection was written; the request itself is traceable
@@ -267,7 +269,7 @@ def test_idempotency_race_returns_replayed(kernel, agent: Client, monkeypatch) -
     at commit time and must answer with the winner's stored response, not INTERNAL_ERROR."""
     from anerp.core import dispatch as d
 
-    payload = {"supplier": "ACME", "lines": [{"sku": "WIDGET-1", "qty": 2, "unit_cost": "50.00"}]}
+    payload = {"supplier": "ACME", "lines": [{"sku": "VALVE-2IN", "qty": 2, "unit_cost": "50.00"}]}
     first = agent.commit("create_purchase_order", key="race-key-0001", **payload)
     assert first["status"] == "applied"
     count = agent.query("search_documents", type="PurchaseOrder")["count"]
@@ -282,7 +284,7 @@ def test_idempotency_race_returns_replayed(kernel, agent: Client, monkeypatch) -
         "create_purchase_order",
         key="race-key-0001",
         supplier="ACME",
-        lines=[{"sku": "WIDGET-1", "qty": 3, "unit_cost": "50.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 3, "unit_cost": "50.00"}],
     )
     assert (
         conflict["error"]["code"] == "INTERNAL_ERROR"

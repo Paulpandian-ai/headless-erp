@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -9,8 +10,8 @@ from sqlmodel import select
 
 from anerp.core.context import ToolContext
 from anerp.core.errors import precondition
-from anerp.core.money import Money, cents
-from anerp.core.projection import Compensation, EventSpec, Projection
+from anerp.core.money import Money, cents, fmt
+from anerp.core.projection import Compensation, EventSpec, JournalSpec, LineSpec, Projection
 from anerp.core.registry import Annotations, WriteTool, tool
 from anerp.masterdata.models import ACCOUNT_TYPES, Account, Customer, Item, Supplier
 
@@ -71,7 +72,7 @@ class CreateSupplier(WriteTool):
 
 class CreateCustomerPayload(_Strict):
     code: str = Field(
-        min_length=1, max_length=32, description="Short unique customer code, e.g. GLOBEX"
+        min_length=1, max_length=32, description="Short unique customer code, e.g. NORTH"
     )
     name: str = Field(min_length=1)
     credit_limit: Money = Field(
@@ -112,7 +113,7 @@ class CreateCustomer(WriteTool):
 
 class CreateItemPayload(_Strict):
     sku: str = Field(
-        min_length=1, max_length=64, description="Unique stock keeping unit, e.g. WIDGET-1"
+        min_length=1, max_length=64, description="Unique stock keeping unit, e.g. VALVE-2IN"
     )
     name: str = Field(min_length=1)
     standard_cost: Money = Field(
@@ -123,6 +124,14 @@ class CreateItemPayload(_Strict):
         default=True,
         description="Stocked items hit inventory (1300); services expense on receipt (5100)",
     )
+    opening_qty: int = Field(
+        default=0,
+        ge=0,
+        description="Opening stock (stocked items only): posts Dr 1300 Inventory / Cr 3000 Equity at standard cost and sets on_hand",
+    )
+    opening_date: date | None = Field(
+        default=None, description="Posting date of the opening entry; defaults to today"
+    )
 
 
 @tool
@@ -130,9 +139,12 @@ class CreateItem(WriteTool):
     name = "create_item"
     module = "masterdata"
     scope = "masterdata:write"
-    purpose = "Create a purchasable/sellable item with a standard cost and list price."
-    preconditions = ["sku must be unique"]
-    effects = "Item record created with on_hand_qty 0; GL: none; events: item.created."
+    purpose = "Create a purchasable/sellable item with a standard cost and list price, optionally with opening stock."
+    preconditions = [
+        "sku must be unique",
+        "opening_qty only for stocked items with a standard cost; opening date in an open period",
+    ]
+    effects = "Item record created (on_hand = opening_qty); GL: Dr 1300 Inventory / Cr 3000 Owner's equity at opening_qty x standard cost when opening_qty > 0; events: item.created."
     compensating_tool = "deactivate_item"
     compensating_when = "after creation, blocks new order lines"
     emits = ["item.created"]
@@ -146,10 +158,32 @@ class CreateItem(WriteTool):
             standard_cost_cents=cents(payload.standard_cost),
             list_price_cents=cents(payload.list_price),
             is_stocked=payload.is_stocked,
+            on_hand_qty=payload.opening_qty,
         )
         p = Projection()
         p.create("Item", item, primary=True)
-        p.events.append(EventSpec("item.created", f"Item {item.sku} ({item.name}) created"))
+        summary = f"Item {item.sku} ({item.name}) created"
+        if payload.opening_qty:
+            ctx.require(item.is_stocked, "opening_qty needs a stocked item", sku=item.sku)
+            ctx.require(
+                item.standard_cost_cents > 0, "opening_qty needs a standard cost", sku=item.sku
+            )
+            posting_date = payload.opening_date or ctx.now.date()
+            value = item.standard_cost_cents * payload.opening_qty
+            p.journal = JournalSpec(
+                posting_date,
+                f"Opening stock {payload.opening_qty} x {item.sku} @ {fmt(item.standard_cost_cents)}",
+                "ItemOpeningBalance",
+                item.id,
+                [
+                    LineSpec("1300", debit_cents=value, description=f"opening stock {item.sku}"),
+                    LineSpec("3000", credit_cents=value, description=f"opening equity {item.sku}"),
+                ],
+            )
+            p.facts.update(ctx.period_facts(posting_date))
+            p.extra = {"opening_value_cents": value}
+            summary += f" with opening stock {payload.opening_qty} ({fmt(value)})"
+        p.events.append(EventSpec("item.created", summary))
         p.compensation = Compensation("deactivate_item", {"item": item.sku})
         return p
 

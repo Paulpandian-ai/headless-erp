@@ -159,9 +159,18 @@ def resolve_actor(envelope_actor: Actor, principal: Principal | None) -> Actor:
 
 
 def dispatch(
-    envelope: Envelope | dict[str, Any], *, principal: Principal | None = None
+    envelope: Envelope | dict[str, Any],
+    *,
+    principal: Principal | None = None,
+    session: Session | None = None,
 ) -> dict[str, Any]:
-    """Run one write operation. Always returns a dict; business errors are never raised."""
+    """Run one write operation. Always returns a dict; business errors are never raised.
+
+    `session`: run the commit inside the caller's open transaction instead of an owned one
+    (used by the seed so `reset_and_seed` is one atomic transaction). Nothing is committed or
+    rolled back here in that case; the caller owns the transaction and must abort it when the
+    returned response is an error. Simulate mode needs its own session.
+    """
     request_id = new_ulid()
     timer = _Timer()
     if isinstance(envelope, dict):
@@ -249,7 +258,10 @@ def dispatch(
         )
         return _error_response(err, mode=mode, request_id=request_id)
 
-    session = new_session()
+    owned = session is None
+    if not owned and mode == "simulate":
+        raise ValueError("simulate cannot run inside a caller's transaction; omit `session`")
+    session = session or new_session()
     try:
         if mode == "simulate":
             response = _simulate(
@@ -257,11 +269,21 @@ def dispatch(
             )
         else:
             response = _commit(
-                session, tool, envelope, actor, payload, request_id, base_log, timer, principal
+                session,
+                tool,
+                envelope,
+                actor,
+                payload,
+                request_id,
+                base_log,
+                timer,
+                principal,
+                owned,
             )
         return response
     except AnerpError as exc:
-        session.rollback()
+        if owned:
+            session.rollback()
         _log(
             {
                 **base_log,
@@ -273,7 +295,8 @@ def dispatch(
         )
         return _error_response(exc, mode=mode, request_id=request_id)
     except Exception:  # noqa: BLE001 - convert to INTERNAL_ERROR, never leak a 500 to an agent
-        session.rollback()
+        if owned:
+            session.rollback()
         log.exception("internal error in %s (%s)", tool.name, request_id)
         err = AnerpError(
             ErrorCode.INTERNAL_ERROR, _INTERNAL_MESSAGE.format(request_id=request_id), {}
@@ -289,7 +312,8 @@ def dispatch(
         )
         return _error_response(err, mode=mode, request_id=request_id)
     finally:
-        session.close()
+        if owned:
+            session.close()
 
 
 def run_query(
@@ -546,6 +570,7 @@ def _commit(
     base_log: dict[str, Any],
     timer: _Timer,
     principal: Principal | None = None,
+    owned: bool = True,
 ) -> dict[str, Any]:
     assert envelope.idempotency_key is not None
     payload_dict = payload.model_dump(mode="json")
@@ -569,8 +594,25 @@ def _commit(
         _check_simulation(envelope.simulation_id, tool.name, req_hash, state_versions)
 
     if policy.decision == "deny":
+        code = ErrorCode(policy.error_code or "POLICY_DENIED")
+        if code.value in tool.park_on_deny and owned:
+            return _standalone_approval(
+                session,
+                tool,
+                projection,
+                actor,
+                policy,
+                envelope,
+                req_hash,
+                before_hash,
+                request_id,
+                base_log,
+                timer,
+                kind=tool.park_on_deny[code.value],
+                error_code=code,
+            )
         raise AnerpError(
-            ErrorCode(policy.error_code or "POLICY_DENIED"),
+            code,
             "; ".join(policy.reasons) or "denied by policy",
             {
                 "policy": policy.as_dict(),
@@ -581,6 +623,10 @@ def _commit(
     pending_approval = False
     if policy.decision == "requires_approval":
         if projection.on_requires_approval is None:
+            if not owned:
+                raise RuntimeError(
+                    "REQUIRES_APPROVAL cannot be parked inside a caller's transaction"
+                )
             return _standalone_approval(
                 session,
                 tool,
@@ -642,6 +688,7 @@ def _commit(
     approval_request: ApprovalRequest | None = None
     if pending_approval and primary is not None:
         approval_request = ApprovalRequest(
+            kind=tool.approval_kind,
             document_type=primary.type,
             document_id=primary.instance.id,
             document_number=getattr(primary.instance, "number", None),
@@ -764,6 +811,20 @@ def _commit(
     response = _jsonable(response)
     stored = {k: v for k, v in response.items() if k != "secret"}
     idempotency.store(session, envelope.idempotency_key, tool.name, req_hash, stored, receipt.id)
+    if not owned:
+        session.flush()  # the caller commits (or aborts) the transaction; no after_commit hooks
+        _log(
+            {
+                **base_log,
+                "outcome": "applied",
+                "policy_decision": policy.decision,
+                "policy": policy.as_dict(),
+                "latency_ms": timer.ms,
+                "document_id": doc_id,
+                "receipt_id": receipt.id,
+            }
+        )
+        return response
     try:
         session.commit()
     except IntegrityError:
@@ -863,6 +924,9 @@ def _standalone_approval(
     request_id: str,
     base_log: dict[str, Any],
     timer: _Timer,
+    *,
+    kind: str | None = None,
+    error_code: ErrorCode = ErrorCode.REQUIRES_APPROVAL,
 ) -> dict[str, Any]:
     """Approval needed but the tool cannot persist a pending version.
 
@@ -873,9 +937,15 @@ def _standalone_approval(
     granted the agent commits again with a new key.
     """
     assert envelope.idempotency_key is not None
+    kind = kind or tool.approval_kind
     session.rollback()
     primary = projection.primary
-    persisted_target = primary is not None and primary.action == "update"
+    target = projection.approval_target
+    target_type = projection.approval_target_type or (
+        type(target).__name__ if target is not None else None
+    )
+    if target is None and primary is not None and primary.action == "update":
+        target, target_type = primary.instance, primary.type
     pending = session.exec(
         select(ApprovalRequest).where(
             ApprovalRequest.tool_name == tool.name,
@@ -886,13 +956,13 @@ def _standalone_approval(
     deduplicated = pending is not None
     if pending is None:
         pending = ApprovalRequest(
-            document_type=primary.type if primary else tool.name,
-            document_id=primary.instance.id if (primary and persisted_target) else None,
-            document_number=getattr(primary.instance, "number", None)
-            if (primary and persisted_target)
-            else None,
+            document_type=target_type or (primary.type if primary else tool.name),
+            document_id=target.id if target is not None else None,
+            document_number=getattr(target, "number", None) if target is not None else None,
             tool_name=tool.name,
+            kind=kind,
             request_hash=req_hash,
+            payload_json=envelope.payload,
             requested_by=actor.id,
             reason="; ".join(policy.reasons),
             projected_effects_json=_projection_dict(projection, committed=False),
@@ -953,17 +1023,25 @@ def _standalone_approval(
             "deduplicated": deduplicated,
         },
     )
+    next_step = {
+        "goods_acceptance": "a human counts the delivery and calls accept_goods (or reject_goods) with this request id",
+        "invoice_variance": "a human reviews the variance: correct the invoice and post again, or reject_approval",
+    }.get(
+        kind,
+        "a human approver decides via the approval inbox; then commit again with a new idempotency_key",
+    )
     err = AnerpError(
-        ErrorCode.REQUIRES_APPROVAL,
+        error_code,
         "; ".join(policy.reasons) or "approval required",
         {
             "policy": policy.as_dict(),
             "approval_request_id": pending.id,
+            "approval_kind": kind,
             "approval_request_status": pending.status,
             "deduplicated": deduplicated,
             "receipt_id": receipt.id,
             "projected_effects": _projection_dict(projection, committed=False),
-            "next_step": "a human approver decides via the approval inbox; then commit again with a new idempotency_key",
+            "next_step": next_step,
         },
     )
     response = _jsonable(

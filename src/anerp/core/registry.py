@@ -69,6 +69,11 @@ class WriteTool(BaseTool):
     compensating_when: ClassVar[str] = ""
     common_errors: ClassVar[list[str]] = []
     emits: ClassVar[list[str]] = []
+    # Kind of ApprovalRequest this tool parks when policy says requires_approval.
+    approval_kind: ClassVar[str] = "po_approval"
+    # Policy error codes that park an ApprovalRequest of the given kind instead of just refusing
+    # (e.g. {"MATCH_VARIANCE_EXCEEDED": "invoice_variance"}). The error is still returned.
+    park_on_deny: ClassVar[dict[str, str]] = {}
 
     def project(self, ctx: ToolContext, payload: Any) -> Projection:  # pragma: no cover - abstract
         raise NotImplementedError

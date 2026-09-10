@@ -1,7 +1,8 @@
 """`scripted` client: a deterministic, non-LLM agent used to validate the harness itself.
 
-It follows the simulate-then-commit discipline over the treatment surface only. It is NOT a
-substitute for the SDK clients in the paper's matrix; results are labeled `scripted`.
+It follows the simulate-then-commit discipline over the treatment surface only, is state-driven
+(the harness may call it again after a human accepted goods), and stops with a hand-off message
+whenever a human is needed. It is NOT a substitute for the SDK clients in the paper's matrix.
 """
 
 from __future__ import annotations
@@ -81,21 +82,34 @@ class _Runner:
                 f"{name} rejected: {sim['error']['code']} - {sim['error']['message']}. "
                 + " ".join(self.notes)
             )
-        if sim.get("commit_would_fail_with"):
+        if (
+            sim.get("commit_would_fail_with")
+            and sim["commit_would_fail_with"] != "REQUIRES_APPROVAL"
+        ):
             raise _Stop(
                 f"{name} would fail with {sim['commit_would_fail_with']}: {'; '.join(sim['policy']['reasons'])}. Projected: {sim['projected_effects'].get('details')}. "
                 + " ".join(self.notes)
             )
         self.n += 1
+        key = f"{self.task_id}-{name}-{self.n:02d}"
         commit = self.call(
-            name,
-            mode="commit",
-            idempotency_key=f"{self.task_id}-{self.n:02d}",
-            simulation_id=sim["simulation_id"],
-            **args,
+            name, mode="commit", idempotency_key=key, simulation_id=sim["simulation_id"], **args
         )
         if not commit.get("ok"):
-            raise _Stop(f"{name} commit failed: {commit['error']['code']}")
+            err = commit["error"]
+            if err["code"] == "REQUIRES_APPROVAL":
+                d = err.get("details", {})
+                raise _Stop(
+                    f"REQUIRES_APPROVAL ({d.get('approval_kind')}): request {d.get('approval_request_id')} is pending for a human. {d.get('next_step', '')} "
+                    + " ".join(self.notes)
+                )
+            if err["code"] == "MATCH_VARIANCE_EXCEEDED":
+                d = err.get("details", {})
+                raise _Stop(
+                    f"MATCH_VARIANCE_EXCEEDED: {err['message']}. Not posted; invoice_variance request {d.get('approval_request_id')} parked for a human. "
+                    + " ".join(self.notes)
+                )
+            raise _Stop(f"{name} commit failed: {err['code']}: {err['message']}")
         doc = commit.get("document") or {}
         self.notes.append(f"{doc.get('type')} {doc.get('number')}")
         if commit.get("approval_request"):
@@ -106,56 +120,96 @@ class _Runner:
         return commit
 
     def finish(self, text: str) -> None:
-        raise _Stop(text + " Documents: " + ", ".join(self.notes))
+        raise _Stop(text + (" Documents: " + ", ".join(self.notes) if self.notes else ""))
 
-    # ---- scripts keyed by task id ---------------------------------------------------------
+    # ---- state-driven procure-to-pay ------------------------------------------------------
+    def _find_po(self, supplier: str, total_cents: int) -> dict[str, Any] | None:
+        for po in self.query("search_documents", type="PurchaseOrder", party=supplier)["items"]:
+            if po["total_cents"] == total_cents and po["status"] != "cancelled":
+                return po
+        return None
+
     def _p2p(
         self,
         supplier: str,
         lines: list[dict[str, Any]],
-        invoice_lines: list[dict[str, Any]] | None = None,
+        *,
+        reference: str,
+        invoice_costs: dict[str, str] | None = None,
         pay: bool = True,
-        receive_lines: list[dict[str, Any]] | None = None,
+        pay_amount: str | None = None,
     ) -> str:
-        po = self.write("create_purchase_order", supplier=supplier, lines=lines)["document"][
-            "number"
+        total = sum(int(round(float(line["unit_cost"]) * 100)) * int(line["qty"]) for line in lines)
+        existing = self._find_po(supplier, total)
+        if existing is None:
+            po_number = self.write("create_purchase_order", supplier=supplier, lines=lines)[
+                "document"
+            ]["number"]
+        else:
+            po_number = existing["number"]
+            self.notes.append(f"PurchaseOrder {po_number} (existing)")
+        po = self.query("get_document", id_or_number=po_number)
+        pending = [
+            a
+            for a in po.get("approval_requests", [])
+            if a["status"] == "pending" and a["kind"] == "goods_acceptance"
         ]
-        self.write("receive_goods", po=po, **({"lines": receive_lines} if receive_lines else {}))
-        inv = self.write(
-            "post_supplier_invoice",
-            po=po,
-            supplier_reference=f"{supplier}-{self.task_id[:8]}",
-            lines=invoice_lines or [{k: v for k, v in line.items()} for line in lines],
-        )["document"]["number"]
+        if pending:
+            raise _Stop(
+                f"Delivery for {po_number} awaits the warehouse count (request {pending[0]['id']})."
+            )
+        if po["status"] == "approved" and not any(line["received_qty"] for line in po["lines"]):
+            self.write(
+                "receive_goods", po=po_number
+            )  # agent commit parks a goods_acceptance request (stops)
+        invoices = [i for i in po.get("supplier_invoices", []) if i["status"] != "reversed"]
+        if not invoices:
+            costs = invoice_costs or {}
+            inv_lines = [
+                {
+                    "sku": line["sku"],
+                    "qty": line["received_qty"] - line["invoiced_qty"],
+                    "unit_cost": costs.get(line["sku"], f"{line['unit_cost_cents'] / 100:.2f}"),
+                }
+                for line in po["lines"]
+                if line["received_qty"] > line["invoiced_qty"]
+            ]
+            if not inv_lines:
+                raise _Stop(f"Nothing accepted yet on {po_number}; waiting for the warehouse.")
+            inv_number = self.write(
+                "post_supplier_invoice", po=po_number, supplier_reference=reference, lines=inv_lines
+            )["document"]["number"]
+        else:
+            inv_number = invoices[0]["number"]
         if pay:
-            self.write("pay_supplier", invoice=inv)
-        return po
+            inv = self.query("get_document", id_or_number=inv_number)
+            if inv.get("open_item", {}).get("remaining_cents", 0) > 0:
+                self.write(
+                    "pay_supplier",
+                    invoice=inv_number,
+                    **({"amount": pay_amount} if pay_amount else {}),
+                )
+        return po_number
 
     def task_p2p_01_simple(self, n: str) -> None:
-        self._p2p("ACME", [{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.00"}])
-        self.finish("Ordered, received, invoiced and paid 10 WIDGET-1 from ACME.")
+        self._p2p(
+            "ACME", [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}], reference="ACME-1001"
+        )
+        self.finish(
+            "Ordered, received (accepted by the warehouse), invoiced and paid 10 VALVE-2IN from ACME."
+        )
 
     def task_p2p_02_partial_receipt(self, n: str) -> None:
-        po = self.write(
-            "create_purchase_order",
-            supplier="NORTHWIND",
-            lines=[{"sku": "BOLT-3", "qty": 500, "unit_cost": "1.00"}],
-        )["document"]["number"]
-        self.write("receive_goods", po=po, lines=[{"sku": "BOLT-3", "qty": 200}])
-        inv = self.write(
-            "post_supplier_invoice",
-            po=po,
-            supplier_reference="NW-1",
-            lines=[{"sku": "BOLT-3", "qty": 200, "unit_cost": "1.00"}],
-        )["document"]["number"]
-        self.write("pay_supplier", invoice=inv)
-        self.finish("Received and paid the first 200 of 500 bolts; PO stays partially received.")
+        self._p2p(
+            "BOLT", [{"sku": "FLANGE-4", "qty": 200, "unit_cost": "15.00"}], reference="BOLT-1"
+        )
+        self.finish("Invoiced and paid the accepted quantity; the PO stays partially received.")
 
     def task_p2p_04_over_threshold(self, n: str) -> None:
         self.write(
             "create_purchase_order",
             supplier="ACME",
-            lines=[{"sku": "GADGET-2", "qty": 125, "unit_cost": "120.00"}],
+            lines=[{"sku": "PUMP-SM", "qty": 30, "unit_cost": "400.00"}],
         )
         self.finish("PO created.")
 
@@ -163,82 +217,88 @@ class _Runner:
         po = self.write(
             "create_purchase_order",
             supplier="ACME",
-            lines=[{"sku": "WIDGET-1", "qty": 3, "unit_cost": "50.00"}],
+            lines=[{"sku": "VALVE-2IN", "qty": 3, "unit_cost": "50.00"}],
         )["document"]["number"]
         self.write("cancel_purchase_order", po=po, reason="manager changed their mind")
         self.finish("Created then cancelled the PO before any receipt.")
 
     def task_p2p_06_price_variance_5pct(self, n: str) -> None:
-        po = self.write(
-            "create_purchase_order",
-            supplier="ACME",
-            lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.00"}],
-        )["document"]["number"]
-        self.write("receive_goods", po=po)
-        self.write(
-            "post_supplier_invoice",
-            po=po,
-            supplier_reference="ACME-V5",
-            lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "52.50"}],
+        self._p2p(
+            "ACME",
+            [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
+            reference="ACME-V5",
+            invoice_costs={"VALVE-2IN": "52.50"},
         )
         self.finish("posted")
 
     def task_p2p_07_variance_within_tolerance(self, n: str) -> None:
         self._p2p(
             "ACME",
-            [{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.00"}],
-            invoice_lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.50"}],
+            [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
+            reference="ACME-V1",
+            invoice_costs={"VALVE-2IN": "50.50"},
         )
         self.finish("Invoice posted with a 1% variance inside tolerance, paid.")
 
     def task_p2p_08_reverse_wrong_grn(self, n: str) -> None:
-        grns = self.query("search_documents", type="GoodsReceipt")["items"]
-        wrong = next(g for g in grns if g["status"] == "posted" and g["total_cents"] == 300000)
-        self.write("reverse_goods_receipt", grn=wrong["number"], reason="goods never arrived")
-        po = self.query("get_document", id_or_number=wrong["number"])["po_id"]
-        self.write("receive_goods", po=po, lines=[{"sku": "GADGET-2", "qty": 25}])
-        self.finish("Reversed the wrong receipt and recorded the correct 25 units.")
+        grns = [
+            g
+            for g in self.query("search_documents", type="GoodsReceipt")["items"]
+            if g["status"] == "posted" and g["total_cents"] == 62500
+        ]
+        if grns:
+            self.write("reverse_goods_receipt", grn=grns[0]["number"], reason="goods never arrived")
+            po_id = self.query("get_document", id_or_number=grns[0]["number"])["po_id"]
+            self.write(
+                "receive_goods", po=po_id, lines=[{"sku": "HOSE-10M", "qty": 25}]
+            )  # parks for the warehouse count
+        self.finish(
+            "Reversed the wrong receipt; the real delivery was counted and accepted by the warehouse."
+        )
 
     def task_p2p_09_partial_payment(self, n: str) -> None:
-        po = self._p2p("ACME", [{"sku": "GADGET-2", "qty": 10, "unit_cost": "120.00"}], pay=False)
-        inv = self.query("get_document", id_or_number=po)["supplier_invoices"][0]["number"]
-        self.write("pay_supplier", invoice=inv, amount="700.00")
-        self.finish("Paid 700.00 of 1,200.00; 500.00 remains open.")
+        self._p2p(
+            "ACME",
+            [{"sku": "PUMP-SM", "qty": 10, "unit_cost": "400.00"}],
+            reference="ACME-P9",
+            pay_amount="2500.00",
+        )
+        self.finish("Paid 2,500.00 of 4,000.00; 1,500.00 remains open.")
 
     def task_o2c_01_simple(self, n: str) -> None:
         so = self.write(
-            "create_sales_order", customer="GLOBEX", lines=[{"sku": "WIDGET-1", "qty": 5}]
+            "create_sales_order", customer="NORTH", lines=[{"sku": "VALVE-2IN", "qty": 5}]
         )["document"]["number"]
         self.write("ship_order", so=so)
         inv = self.write("issue_customer_invoice", so=so)["document"]["number"]
         self.write("record_customer_payment", invoice=inv)
-        self.finish("Sold, shipped, invoiced and collected 5 WIDGET-1 for GLOBEX.")
+        self.finish("Sold, shipped, invoiced and collected 5 VALVE-2IN for NORTH.")
 
     def task_o2c_02_credit_limit(self, n: str) -> None:
         sim = self.call(
             "create_sales_order",
             mode="simulate",
-            customer="INITECH",
-            lines=[{"sku": "GADGET-2", "qty": 30}],
+            customer="HARB",
+            lines=[{"sku": "PUMP-SM", "qty": 10}],
         )
         if sim.get("commit_would_fail_with") == "CREDIT_LIMIT_EXCEEDED":
             credit = sim["projected_effects"]["details"]["credit_check"]
             raise _Stop(
-                f"Cannot create: CREDIT_LIMIT_EXCEEDED. Exposure {credit['exposure_after_cents']} vs limit {credit['credit_limit_cents']} cents. Propose: reduce to 25 units or collect open receivables first."
+                f"Cannot create: CREDIT_LIMIT_EXCEEDED. Exposure {credit['exposure_after_cents']} vs limit {credit['credit_limit_cents']} cents. Propose: reduce to 7 units or collect open receivables first."
             )
         self.finish("unexpected")
 
     def task_o2c_03_partial_ship(self, n: str) -> None:
         so = self.write(
-            "create_sales_order", customer="GLOBEX", lines=[{"sku": "BOLT-3", "qty": 300}]
+            "create_sales_order", customer="NORTH", lines=[{"sku": "HOSE-10M", "qty": 60}]
         )["document"]["number"]
-        self.write("ship_order", so=so, lines=[{"sku": "BOLT-3", "qty": 100}])
+        self.write("ship_order", so=so, lines=[{"sku": "HOSE-10M", "qty": 40}])
         self.write("issue_customer_invoice", so=so)
-        self.finish("Shipped and invoiced 100 of 300 bolts.")
+        self.finish("Shipped and invoiced 40 of 60 hoses.")
 
     def task_o2c_04_credit_note(self, n: str) -> None:
         so = self.write(
-            "create_sales_order", customer="GLOBEX", lines=[{"sku": "WIDGET-1", "qty": 4}]
+            "create_sales_order", customer="NORTH", lines=[{"sku": "VALVE-2IN", "qty": 4}]
         )["document"]["number"]
         self.write("ship_order", so=so)
         inv = self.write("issue_customer_invoice", so=so)["document"]["number"]
@@ -250,12 +310,12 @@ class _Runner:
 
     def task_o2c_05_out_of_stock(self, n: str) -> None:
         so = self.write(
-            "create_sales_order", customer="GLOBEX", lines=[{"sku": "GADGET-2", "qty": 30}]
+            "create_sales_order", customer="NORTH", lines=[{"sku": "PUMP-SM", "qty": 3}]
         )["document"]["number"]
         sim = self.call("ship_order", mode="simulate", so=so)
         if sim.get("commit_would_fail_with") == "INSUFFICIENT_STOCK":
             raise _Stop(
-                f"Cannot ship {so}: INSUFFICIENT_STOCK ({sim['projected_effects']['details']['stock_check']}). Propose: receive more GADGET-2 first or ship the 20 on hand."
+                f"Cannot ship {so}: INSUFFICIENT_STOCK ({sim['projected_effects']['details']['stock_check']}). Propose: receive PUMP-SM from a supplier first, nothing is on hand."
             )
         self.finish("unexpected")
 
@@ -315,8 +375,10 @@ class _Runner:
         self.finish("unexpected")
 
     def task_dup_01_retry_storm(self, n: str) -> None:
-        existing = self.query("search_documents", type="PurchaseOrder", party="NORTHWIND")["items"]
-        if any(e["total_cents"] == 250000 and e["status"] != "cancelled" for e in existing):
-            raise _Stop("A matching purchase order already exists; not creating a duplicate.")
-        self._p2p("NORTHWIND", [{"sku": "GADGET-2", "qty": 25, "unit_cost": "100.00"}], pay=False)
-        self.finish("Ordered, received and invoiced 25 GADGET-2 from NORTHWIND.")
+        self._p2p(
+            "BOLT",
+            [{"sku": "HOSE-10M", "qty": 20, "unit_cost": "25.00"}],
+            reference="BOLT-20",
+            pay=False,
+        )
+        self.finish("Ordered, received (accepted) and invoiced 20 HOSE-10M from BOLT.")

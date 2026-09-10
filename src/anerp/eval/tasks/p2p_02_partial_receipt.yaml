@@ -1,13 +1,17 @@
 id: p2p_02_partial_receipt
 module: procurement
 narrative: >
-  Order 500 BOLT-3 from NORTHWIND at 1.00 each. Only 200 have arrived so far: receive those 200,
-  post NORTHWIND's invoice NW-1 for the 200 received (1.00 each) and pay it. Leave the rest open.
+  Order 200 FLANGE-4 from BOLT at 15.00 each. The warehouse will count what actually arrives; post
+  BOLT's invoice BOLT-1 only for the accepted quantity at 15.00 and pay it. Leave the rest of the
+  order open.
 seed: baseline
 max_steps: 24
+human_loop: [goods_acceptance]
+acceptance:
+  - {sku: FLANGE-4, qty: 80, note: "short delivery, 120 to follow"}
 goal_state:
-  - {check: count, type: PurchaseOrder, where: {party: NORTHWIND, status: partially_received}, expected: 1}
-  - {check: inventory_delta, sku: BOLT-3, delta: 200}
-  - {check: balance_delta, account: "1000", delta_cents: -20000}
-  - {check: open_items, kind: ap, party: NORTHWIND, total_remaining_cents: 0}
+  - {check: count, type: PurchaseOrder, where: {party: BOLT, status: partially_received}, expected: 1}
+  - {check: inventory_delta, sku: FLANGE-4, delta: 80}
+  - {check: balance_delta, account: "1000", delta_cents: -120000}
+  - {check: open_items, kind: ap, party: BOLT, total_remaining_cents: 0}
   - {check: tb_balanced}

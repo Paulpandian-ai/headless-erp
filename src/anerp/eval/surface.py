@@ -17,6 +17,7 @@ class ToolSurface(Protocol):
 
 EVAL_AGENT_SCOPES = [
     "procurement:write",
+    "procurement:receive",
     "sales:write",
     "finance:*",
     "masterdata:write",

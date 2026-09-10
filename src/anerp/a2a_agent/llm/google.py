@@ -38,7 +38,10 @@ class GoogleClient:
                 system_instruction=system, tools=[types.Tool(function_declarations=declarations)]
             ),
         )
-        candidate = response.candidates[0]
+        candidates = response.candidates or []
+        if not candidates:
+            return LLMTurn(text="The model returned no candidates.", raw=None)
+        candidate = candidates[0]
         turn = LLMTurn(raw=candidate.content)
         for i, part in enumerate(candidate.content.parts or []):
             if getattr(part, "text", None):

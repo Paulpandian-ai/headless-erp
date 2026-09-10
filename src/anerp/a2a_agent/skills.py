@@ -57,7 +57,11 @@ class Runner:
                 f"{name} failed validation: {sim['error']['code']}: {sim['error']['message']}"
             )
             return None
-        if sim.get("commit_would_fail_with"):
+        if (
+            sim.get("commit_would_fail_with")
+            and sim["commit_would_fail_with"] != "REQUIRES_APPROVAL"
+        ):
+            # (REQUIRES_APPROVAL is not a failure: the commit parks a request for a human)
             self.result.ok = False
             self.result.blocked = {
                 "tool": name,
@@ -84,11 +88,19 @@ class Runner:
             {"tool": name, "mode": "commit", "ok": commit.get("ok"), "status": commit.get("status")}
         )
         if not commit.get("ok"):
+            err = commit["error"]
+            if err.get("code") == "REQUIRES_APPROVAL":
+                details = err.get("details", {})
+                self.result.approval_request_id = details.get("approval_request_id")
+                self.result.input_required = True
+                self.result.text = (
+                    f"{name} is parked for a human ({details.get('approval_kind')}): request "
+                    f"{self.result.approval_request_id}. {details.get('next_step', '')}"
+                )
+                return None
             self.result.ok = False
-            self.result.blocked = {"tool": name, "error": commit.get("error")}
-            self.result.text = (
-                f"{name} commit failed: {commit['error']['code']}: {commit['error']['message']}"
-            )
+            self.result.blocked = {"tool": name, "error": err}
+            self.result.text = f"{name} commit failed: {err['code']}: {err['message']}"
             return None
         doc = commit.get("document") or {}
         if doc.get("number"):
@@ -102,7 +114,9 @@ class Runner:
 def procure_to_pay(
     principal: Principal, task_id: str, params: dict[str, Any], state: dict[str, Any]
 ) -> SkillResult:
-    """params: supplier, lines[{sku, qty, unit_cost}], invoice_lines?, pay (default true), supplier_reference?"""
+    """params: supplier, lines[{sku, qty, unit_cost}], invoice_unit_costs? {sku: cost}, pay (default true),
+    supplier_reference?. Goods are posted by a human: the skill parks a goods_acceptance request and
+    returns input-required; on resume it invoices the accepted quantities (three-way match)."""
     r = Runner(principal, task_id)
     po_number = state.get("po")
     if po_number is None:
@@ -118,11 +132,15 @@ def procure_to_pay(
         po_number = commit["document"]["number"]
         state["po"] = po_number
         if r.result.input_required:
-            r.result.text = f"Purchase order {po_number} created in draft; total exceeds the approval threshold. Approval request {r.result.approval_request_id} is pending for a human approver. Resume this task once approved."
+            r.result.text = (
+                f"Purchase order {po_number} created in draft; total exceeds the approval threshold. "
+                f"Approval request {r.result.approval_request_id} is pending for a human approver. "
+                "Resume this task once approved."
+            )
             return r.result
     po = r.query("get_document", id_or_number=po_number)
+    pending = [a for a in po.get("approval_requests", []) if a["status"] == "pending"]
     if po.get("status") == "draft":
-        pending = [a for a in po.get("approval_requests", []) if a["status"] == "pending"]
         r.result.input_required = True
         r.result.approval_request_id = pending[0]["id"] if pending else None
         r.result.text = f"Purchase order {po_number} is still awaiting approval."
@@ -131,11 +149,37 @@ def procure_to_pay(
         r.result.ok = False
         r.result.text = f"Purchase order {po_number} was cancelled (approval rejected)."
         return r.result
-    if po.get("status") == "approved" and r.write("receive_goods", "grn", po=po_number) is None:
+    acceptance = [a for a in pending if a["kind"] == "goods_acceptance"]
+    if acceptance:
+        r.result.input_required = True
+        r.result.approval_request_id = acceptance[0]["id"]
+        r.result.text = f"Delivery for {po_number} is awaiting the warehouse count (request {acceptance[0]['id']})."
+        return r.result
+    if po.get("status") == "approved" and not any(line["received_qty"] for line in po["lines"]):
+        r.write("receive_goods", "grn", po=po_number)  # agent: parks a goods_acceptance request
+        if r.result.input_required:
+            r.result.text = (
+                f"Goods for {po_number} must be counted by a human: goods_acceptance request "
+                f"{r.result.approval_request_id} is pending (accept_goods / reject_goods). Resume once accepted."
+            )
         return r.result
     inv_number = state.get("invoice")
-    if inv_number is None and po.get("status") not in ("invoiced",):
-        lines = params.get("invoice_lines") or params["lines"]
+    if inv_number is None and po.get("status") != "invoiced":
+        costs = params.get("invoice_unit_costs") or {}
+        po_costs = {line["sku"]: line["unit_cost_cents"] for line in po["lines"]}
+        lines = [
+            {
+                "sku": line["sku"],
+                "qty": line["received_qty"] - line["invoiced_qty"],
+                "unit_cost": costs.get(line["sku"], f"{po_costs[line['sku']] / 100:.2f}"),
+            }
+            for line in po["lines"]
+            if line["received_qty"] > line["invoiced_qty"]
+        ]
+        if not lines:
+            r.result.ok = False
+            r.result.text = f"Nothing accepted on {po_number} to invoice."
+            return r.result
         commit = r.write(
             "post_supplier_invoice",
             "sinv",

@@ -118,7 +118,15 @@ class ToolContext:
 
     # ---- numbering -------------------------------------------------------------------
     def number_for(self, document_type: str) -> str:
-        """Projected number; the dispatcher allocates the real one inside the commit transaction."""
-        from anerp.ledger.sequences import peek_number
+        """Document number for a new document.
 
+        In commit mode the number is allocated for real, inside the commit transaction, so every
+        derived value (journal memos, open-item references, event summaries, compensating hints)
+        carries the final number; a failed commit rolls the allocation back. In simulate mode it
+        is a projection (`PO-000124 (projected)`) and nothing is written.
+        """
+        from anerp.ledger.sequences import allocate_number, peek_number
+
+        if self.mode == "commit":
+            return allocate_number(self.session, document_type)
         return peek_number(self.session, document_type)

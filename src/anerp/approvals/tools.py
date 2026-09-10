@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import select
@@ -22,6 +22,7 @@ class _Strict(BaseModel):
 def approval_to_dict(r: ApprovalRequest) -> dict[str, Any]:
     return {
         "id": r.id,
+        "kind": r.kind,
         "document_type": r.document_type,
         "document_id": r.document_id,
         "document_number": r.document_number,
@@ -35,11 +36,15 @@ def approval_to_dict(r: ApprovalRequest) -> dict[str, Any]:
         "expires_at": iso(r.expires_at),
         "created_at": iso(r.created_at),
         "projected_effects": r.projected_effects_json,
+        "payload": r.payload_json,
     }
 
 
 class ListPendingPayload(_Strict):
     for_actor: str | None = Field(default=None, description="Filter by the requesting actor id")
+    kind: Literal["po_approval", "goods_acceptance", "invoice_variance"] | None = Field(
+        default=None, description="Filter by request kind"
+    )
     limit: int = Field(default=50, ge=1, le=500)
 
 
@@ -60,6 +65,8 @@ class ListPendingApprovals(QueryTool):
         )  # type: ignore[arg-type]
         if payload.for_actor:
             stmt = stmt.where(ApprovalRequest.requested_by == payload.for_actor)
+        if payload.kind:
+            stmt = stmt.where(ApprovalRequest.kind == payload.kind)
         rows = ctx.session.exec(stmt.limit(payload.limit)).all()
         items = []
         for r in rows:
@@ -72,6 +79,7 @@ class ListPendingApprovals(QueryTool):
 
 
 class RequestApprovalPayload(_Strict):
+    kind: Literal["po_approval", "goods_acceptance", "invoice_variance"] = "po_approval"
     document_type: str = Field(description="e.g. PurchaseOrder")
     document_id: str = Field(description="Document number or id")
     reason: str = Field(min_length=1)
@@ -108,6 +116,7 @@ class RequestApproval(WriteTool):
             existing_id=existing[0].id if existing else None,
         )
         req = ApprovalRequest(
+            kind=payload.kind,
             document_type=payload.document_type,
             document_id=doc.id,
             document_number=getattr(doc, "number", None),
@@ -149,9 +158,9 @@ class RejectApproval(WriteTool):
     name = "reject_approval"
     module = "approvals"
     scope = "procurement:approve"
-    purpose = "Reject a pending approval request (human approvers only); the originating agent sees it via events."
+    purpose = "Reject a pending approval request of any kind (human approvers only); the originating agent sees it via events."
     preconditions = ["request status pending", "actor token kind is human or admin"]
-    effects = "ApprovalRequest -> rejected; a draft PurchaseOrder stays draft (cancel it separately); events: approval.rejected."
+    effects = "ApprovalRequest -> rejected; a draft PurchaseOrder stays draft (cancel it separately); a parked invoice_variance is closed; events: approval.rejected."
     compensating_tool = None
     common_errors = ["PRECONDITION_FAILED when not pending", "POLICY_DENIED for agent tokens"]
     emits = ["approval.rejected"]

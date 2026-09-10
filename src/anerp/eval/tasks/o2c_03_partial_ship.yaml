@@ -1,12 +1,12 @@
 id: o2c_03_partial_ship
 module: sales
 narrative: >
-  GLOBEX orders 300 BOLT-3 at list price. Ship the 100 that are ready today and invoice only what
-  was shipped; the remaining 200 ship later.
+  NORTH orders 60 HOSE-10M at list price. Ship the 40 that are in stock today and invoice only what
+  was shipped; the remaining 20 ship later.
 seed: baseline
 max_steps: 16
 goal_state:
-  - {check: count, type: SalesOrder, where: {party: GLOBEX, status: partially_shipped}, expected: 1}
-  - {check: inventory_delta, sku: BOLT-3, delta: -100}
-  - {check: open_items, kind: ar, party: GLOBEX, total_remaining_cents: 25000}
+  - {check: count, type: SalesOrder, where: {party: NORTH, status: partially_shipped}, expected: 1}
+  - {check: inventory_delta, sku: HOSE-10M, delta: -40}
+  - {check: open_items, kind: ar, party: NORTH, total_remaining_cents: 160000}
   - {check: tb_balanced}
