@@ -12,6 +12,8 @@ from typing import Any
 from anerp.admin.tokens import resolve_token
 from anerp.config import get_settings
 from anerp.core.envelope import Principal
+from anerp.core.errors import RETRY_ADVICE, ErrorCode
+from anerp.core.requestlog import log_auth_failure
 from anerp.db import session_scope
 
 log = logging.getLogger("anerp.auth")
@@ -52,14 +54,28 @@ def www_authenticate() -> str:
     return "Bearer"
 
 
-def unauthorized_body() -> dict[str, Any]:
-    """The 401 body shared by every HTTP surface (MCP transport and the /api facade)."""
+UNAUTHORIZED_MESSAGE = "missing or invalid bearer token; send Authorization: Bearer <token>"
+
+
+def unauthorized_body(
+    *, tool: str = "<transport>", mode: str = "auth", message: str = UNAUTHORIZED_MESSAGE
+) -> dict[str, Any]:
+    """The 401 body shared by every HTTP surface (MCP transport, /api facade, /events/stream).
+
+    Shaped like every other anerp error response: `ok`, `mode`, `request_id`, `error`. The
+    request_id is written to the request log, so a caller that gets a token can hand it to
+    `explain_error` exactly as it would for a POLICY_DENIED (DESIGN.md §7.7).
+    """
+    request_id = log_auth_failure(tool=tool, mode=mode, message=message)
     return {
         "ok": False,
+        "mode": mode,
+        "request_id": request_id,
         "error": {
-            "code": "UNAUTHORIZED",
-            "message": "missing or invalid bearer token",
-            "retry_advice": "Obtain a valid bearer token (Authorization: Bearer <token>).",
+            "code": ErrorCode.UNAUTHORIZED.value,
+            "message": message,
+            "details": {},
+            "retry_advice": RETRY_ADVICE[ErrorCode.UNAUTHORIZED],
         },
     }
 
@@ -89,7 +105,8 @@ class BearerAuthMiddleware:
         token = bearer_token(headers.get("authorization"))
         principal = principal_from_token(token)
         if principal is None:
-            body = json.dumps(unauthorized_body()).encode()
+            # The MCP JSON-RPC body is not parsed here, so the tool name is not yet known.
+            body = json.dumps(unauthorized_body(tool="mcp")).encode()
             extra = _www_authenticate() if token is None else []
             await send(
                 {

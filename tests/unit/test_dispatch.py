@@ -313,7 +313,10 @@ def test_principal_required_outside_test_env(kernel, agent: Client, monkeypatch)
         )
         assert r["error"]["code"] == "UNAUTHORIZED", tool_name
     assert run_query("get_trial_balance", {}, AGENT)["error"]["code"] == "UNAUTHORIZED"
-    assert call_tool("get_trial_balance", {}, None)["error"]["code"] == "UNAUTHORIZED"
+    refused = call_tool("get_trial_balance", {}, None)
+    assert refused["error"]["code"] == "UNAUTHORIZED"
+    # Refused at the door still gets a request_id, so explain_error can answer for it.
+    assert request_log.get(refused["request_id"]).error_code == "UNAUTHORIZED"
     ok = dispatch(
         Envelope(
             tool="create_supplier", mode="simulate", actor=AGENT, payload={"code": "Q", "name": "Q"}

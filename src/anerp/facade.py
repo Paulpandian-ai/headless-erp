@@ -66,7 +66,10 @@ _RESPONSES: dict[int | str, dict[str, Any]] = {
         "content": {"application/json": {"schema": {"type": "object"}}},
     },
     401: {
-        "description": "Missing or invalid bearer token.",
+        "description": (
+            "Missing or invalid bearer token. Carries a `request_id` like any other error, so "
+            "the failure can be looked up with `explain_error` once a working token is in hand."
+        ),
         "content": {"application/json": {"schema": {"type": "object"}}},
     },
 }
@@ -98,10 +101,10 @@ def _error(
     )
 
 
-def _unauthorized(token: str | None) -> Response:
+def _unauthorized(token: str | None, *, tool: str, mode: str) -> Response:
     headers = {"WWW-Authenticate": www_authenticate()} if token is None else {}
     return Response(
-        content=json.dumps(unauthorized_body()),
+        content=json.dumps(unauthorized_body(tool=tool, mode=mode)),
         media_type="application/json",
         status_code=401,
         headers=headers,
@@ -153,7 +156,7 @@ async def _forward(request: Request, name: str, *, mode: str) -> Response:
         _authenticate, request.headers.get("authorization")
     )
     if principal is None:
-        return _unauthorized(token)
+        return _unauthorized(token, tool=name, mode=mode)
 
     tool = registry.get(name)
     if tool is not None and (mismatch := _kind_mismatch(tool, mode)) is not None:
