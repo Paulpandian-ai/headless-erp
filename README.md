@@ -27,7 +27,7 @@ higher agent task success and safety than a UI-era ERP with an MCP wrapper.* The
 uv sync                                   # Python 3.12, all deps
 uv run pytest -q                          # 39 tests, SQLite in memory, no network
 cp .env.example .env                      # local-to-the-codespace run only; never commit .env
-uv run anerp seed                         # chart of accounts, periods, 2 suppliers, 2 customers, 4 items
+uv run anerp seed                         # chart of accounts, periods (2026-08 closed), ACME/BOLT, NORTH/HARB, 4 items
 uv run anerp token mint human:you --kind admin --scopes 'admin:*'   # prints the clear token once
 uv run anerp serve                        # foreground; MCP at /mcp, A2A at /a2a, SSE at /events/stream (`anerp start` = migrate + serve)
 ```
@@ -44,20 +44,21 @@ environment, so no token is ever in git. `anerp-local` in the same file runs the
 then try:
 
 ```
-create_purchase_order  {supplier: "ACME", lines: [{sku: "WIDGET-1", qty: 10, unit_cost: "50.00"}]}          # simulate
+create_purchase_order  {supplier: "ACME", lines: [{sku: "VALVE-2IN", qty: 10, unit_cost: "50.00"}]}         # simulate
 create_purchase_order  {mode: "commit", idempotency_key: "demo-po-1", simulation_id: "...", ...}                # commit
-receive_goods → post_supplier_invoice → pay_supplier → trace_document PO-000002 → get_trial_balance
+receive_goods (agent: parks a goods-acceptance request) → accept_goods (human token) → post_supplier_invoice
+→ pay_supplier → trace_document PO-000002 → get_trial_balance
 ```
 
-## Tool surface (63 tools)
+## Tool surface (65 tools)
 
 | Module | Tools |
 |---|---|
 | masterdata | `create_/deactivate_/activate_` supplier, customer, item, account |
-| procurement | `create_purchase_order`, `approve_purchase_order`, `receive_goods`, `post_supplier_invoice` (three-way match), `pay_supplier`, `cancel_purchase_order`, `reverse_goods_receipt`, `reverse_supplier_invoice`, `reverse_supplier_payment` |
+| procurement | `create_purchase_order`, `approve_purchase_order`, `receive_goods` (humans post; agents park a goods-acceptance request), `accept_goods`, `reject_goods`, `post_supplier_invoice` (three-way match on accepted quantities), `pay_supplier`, `cancel_purchase_order`, `reverse_goods_receipt`, `reverse_supplier_invoice`, `reverse_supplier_payment` |
 | sales | `create_sales_order` (credit check), `ship_order` (stock check, COGS), `issue_customer_invoice`, `record_customer_payment`, `issue_credit_note`, `cancel_sales_order`, `reverse_shipment`, `reverse_customer_payment` |
 | finance | `post_journal_entry`, `reverse_journal_entry`, `close_period` (readiness checklist), `reopen_period` |
-| approvals | `list_pending_approvals`, `request_approval`, `reject_approval` (+ `approve_purchase_order`; human tokens only) |
+| approvals | `list_pending_approvals` (kinds `po_approval`, `goods_acceptance`, `invoice_variance`), `request_approval`, `reject_approval` (+ `approve_purchase_order`, `accept_goods`, `reject_goods`; human tokens only) |
 | query | `get_document`, `search_documents`, `list_open_items`, `get_account_balance`, `get_trial_balance`, `get_ledger_entries`, `get_inventory`, `get_period`, `poll_events`, `verify_receipt`, `describe_tool`, `list_capabilities` |
 | troubleshoot | `trace_document`, `explain_balance`, `explain_error`, `replay_simulate`, `find_duplicates`, `get_reconciliation`, `get_agent_activity`, `get_request_log` |
 | admin | `mint_token`, `revoke_token`, `list_tokens`, `update_policy`, `rotate_signing_key`, `reset_and_seed` (dev only), `get_system_status` |
@@ -96,16 +97,19 @@ dependencies or infrastructure (conflict-of-interest boundary, DESIGN.md §16).
 
 ## Human in the loop
 
-Purchase orders above the approval threshold (`po_approval_threshold`, 10,000.00 by default) are
-persisted as `draft` with a pending `ApprovalRequest`. `approve_purchase_order` and
-`reject_approval` refuse `kind=agent` tokens (`human_approval_only`) and the creator cannot
-approve their own PO (`po_approver_differs`). The A2A agent returns `input-required` with the
-request id; `list_pending_approvals` is the inbox for any head (chat client, CLI, console).
+Three decisions are structurally human; the kernel does not care which head delivers them (chat
+client, CLI, console), only that the tool is called with a human token (`human_approval_only`).
 
-Tools that cannot hold a pending version return `REQUIRES_APPROVAL` instead. That path still
-writes exactly one thing, receipted: a pending `ApprovalRequest` deduplicated on tool and
-payload hash, so retries and duplicate submissions share it, and the idempotency record for the
-key, so a replay returns the same answer. After approval the agent commits again with a new key.
+| Kind | Raised when | Human tools |
+|---|---|---|
+| `po_approval` | a purchase order exceeds the threshold (10,000.00 by default): the PO is persisted as `draft` | `approve_purchase_order` (not the creator: `po_approver_differs`), `reject_approval` |
+| `goods_acceptance` | an agent commits `receive_goods`: nothing is posted, the projection is parked | `accept_goods` posts the receipt at the counted quantities (short, damaged, over-shipped lines recorded); `reject_goods` |
+| `invoice_variance` | `post_supplier_invoice` fails the three-way match against accepted quantities | correct and re-post, or `reject_approval` |
+
+Agents may simulate every one of these operations and see the decision in `policy`. Parked
+requests are deduplicated on tool and payload hash, receipted, and idempotent, so retries share
+one request. The A2A agent returns `input-required` with the request id and resumes after the
+human acts; `list_pending_approvals` (filter by `kind`) is the inbox.
 
 ## Admin bootstrap
 
@@ -135,7 +139,8 @@ re-runs a past payload against current state and diffs the projection. CLI mirro
 over the same tables (**control**, `src/anerp/eval/crud_server.py`, the only code that bypasses
 the dispatcher). Twenty tasks live in `src/anerp/eval/tasks/*.yaml` with goal-state assertions
 and traps (approval threshold, price variance, credit limit, stock, closed period, retry storm,
-recovery). Metrics per run: task success, unsafe write rate, simulate-before-commit rate,
+recovery). Tasks that need a warehouse count declare `human_loop`; the harness plays the human
+between agent rounds (accepting at the expected quantities unless the task overrides a count). Metrics per run: task success, unsafe write rate, simulate-before-commit rate,
 duplicate document rate, recovery success, cost (tokens, tool calls, wall clock), trial-balance
 integrity.
 

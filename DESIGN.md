@@ -1,7 +1,7 @@
 # Agent-Native ERP Kernel — Design Document
 
 **Project codename:** `anerp` (agent-native ERP)
-**Status:** POC design, v0.2 — September 2026 (adds troubleshooting tools, admin role, approval inbox, cloud-only deployment)
+**Status:** POC design, v0.3 — September 2026 (v0.2 added troubleshooting tools, admin role, approval inbox, cloud-only deployment; v0.3 adds human goods acceptance — see Amendment A)
 **Working model:** Nothing runs on a laptop. Code lives in GitHub; Claude Code runs in a GitHub Codespace or a Claude Code cloud session; the ERP runs on a non-AWS cloud host with hosted Postgres (§20).
 **Language:** Python 3.12+
 **License:** Apache-2.0
@@ -143,7 +143,7 @@
 - `Event(seq PK autoincrement, type, document_type, document_id, receipt_id, payload_json, occurred_at)`
 - `ServerKey(id, public_key_pem, created_at, retired_at?)` — one active Ed25519 key; retired keys kept for `verify_receipt`.
 - `ApiToken(id, token_hash, subject, kind∈{agent,human,admin}, scopes[], created_by, created_at, expires_at?, revoked_at?)` — tokens are never stored in clear.
-- `ApprovalRequest(id, document_type, document_id, requested_by, reason, projected_effects_json, status∈{pending,approved,rejected,expired}, decided_by?, decided_at?)` — the approval inbox (§7.9).
+- `ApprovalRequest(id, kind∈{po_approval,goods_acceptance,invoice_variance}, document_type, document_id?, tool_name, request_hash, payload_json, requested_by, reason, projected_effects_json, status∈{pending,approved,rejected,expired}, decided_by?, decided_at?)` — the approval inbox (§7.9). `document_id` is null when the target was never persisted; the parked projection and payload are kept on the request.
 
 ---
 
@@ -263,8 +263,8 @@ Simulate: returns uniqueness check result and the projected record. Commit: pers
 |---|---|---|---|---|---|
 | `create_purchase_order` | `procurement:write` | supplier active; each item active; qty>0; cost≥0 | projected PO total; whether `po_approval_threshold` will require approval | PO `draft` (or `approved` if under threshold) · no GL · `purchase_order.created` | `cancel_purchase_order` |
 | `approve_purchase_order` | `procurement:approve` | PO in `draft`; actor ≠ `created_by` (standard control) | policy result | PO → `approved` · no GL · `purchase_order.approved` | `cancel_purchase_order` |
-| `receive_goods` | `procurement:write` | PO `approved` or `partially_received`; qty per line ≤ remaining | projected GRN, inventory deltas, JE | GRN · Dr 1300 Inventory (or 5100 if not stocked) / Cr 1400 GR-IR at PO unit cost · on_hand_qty += qty · PO status update · `goods.received` | `reverse_goods_receipt` |
-| `post_supplier_invoice` | `finance:ap:write` | PO has receipts; invoiced_qty ≤ received_qty; period open | three-way match result (PO qty/price vs GRN qty vs invoice), variance amount, tolerance decision, projected JE and AP open item | SINV · Dr 1400 GR-IR (at PO cost) [+ Dr/Cr 5200 variance] / Cr 2000 AP (invoice amount) · OpenItem(ap) · PO → `invoiced` when fully invoiced · `supplier_invoice.posted` | `reverse_supplier_invoice` |
+| `receive_goods` | `procurement:receive` | PO `approved` or `partially_received`; qty per line ≤ remaining; **human token to post** | projected GRN, inventory deltas, JE; for agents `policy.decision=requires_approval` | human: GRN · Dr 1300 Inventory (or 5100 if not stocked) / Cr 1400 GR-IR at PO unit cost · on_hand_qty += qty · PO status update · `goods.received`. Agent commit: nothing posted; `ApprovalRequest(kind=goods_acceptance)` holding the projection and payload · `approval.requested` · returns `REQUIRES_APPROVAL` | `reverse_goods_receipt` |
+| `post_supplier_invoice` | `finance:ap:write` | PO has accepted receipts; invoiced_qty ≤ accepted (received) qty; period open | three-way match result (PO qty/price vs **accepted** qty vs invoice), variance amount, tolerance decision, projected JE and AP open item | SINV · Dr 1400 GR-IR (at PO cost) [+ Dr/Cr 5200 variance] / Cr 2000 AP (invoice amount) · OpenItem(ap) · PO → `invoiced` when fully invoiced · `supplier_invoice.posted`. Blocked on variance: nothing posted; `ApprovalRequest(kind=invoice_variance)` parked · `approval.requested` · returns `MATCH_VARIANCE_EXCEEDED` | `reverse_supplier_invoice` |
 | `pay_supplier` | `finance:ap:pay` | SINV open item remaining > 0; amount ≤ remaining; period open | projected JE, remaining after payment | PAY · Dr 2000 AP / Cr 1000 Cash · OpenItem remaining -= amount · `supplier_payment.recorded` | `reverse_supplier_payment` |
 | `cancel_purchase_order` | `procurement:write` | PO not `received`/`invoiced`/`closed`; no GRNs (else reverse GRNs first) | which downstream docs block cancellation | PO → `cancelled` · `purchase_order.cancelled` | — (terminal) |
 | `reverse_goods_receipt` | `procurement:write` | GRN not invoiced; stock still on hand | projected reversing JE, inventory delta | reversing GRN + reversing JE (swap Dr/Cr) · on_hand -= qty · `goods.receipt_reversed` | — |
@@ -355,7 +355,7 @@ Admin is a **role**, not a backdoor. Every admin action goes through `core.dispa
 | `reset_and_seed(fixture_name)` | drops business data and reseeds | **refuses unless `ANERP_ENV=dev`**; never available in `demo`/`prod` |
 | `get_system_status()` | DB reachability, migration head, active key id, policy version, event seq, token counts | also served unauthenticated (minimal) at `GET /healthz` |
 
-Scope model: `admin:*` ⊇ all module scopes ∪ `{admin:tokens, admin:policy, admin:keys, admin:reset}`. Bootstrap: on first start the server reads `ANERP_BOOTSTRAP_ADMIN_TOKEN` from the environment, stores its hash as an `admin` token with subject `admin:bootstrap`, and logs a warning to mint a personal admin token and rotate the bootstrap one.
+Scope model: `admin:*` ⊇ all module scopes ∪ `{admin:tokens, admin:policy, admin:keys, admin:reset}`. Module scopes include `procurement:write`, `procurement:receive` (receive_goods, accept_goods, reject_goods), `procurement:approve`, `sales:write`, `finance:ap:write`, `finance:ap:pay`, `finance:ar:write`, `finance:gl:write`, `finance:period:close`, `masterdata:write`, `approvals:write`, and the `*:read` scopes. Bootstrap: on first start the server reads `ANERP_BOOTSTRAP_ADMIN_TOKEN` from the environment, stores its hash as an `admin` token with subject `admin:bootstrap`, and logs a warning to mint a personal admin token and rotate the bootstrap one.
 
 ### 7.9 Approval inbox (the human-in-the-loop contract)
 
@@ -366,9 +366,11 @@ Humans are structurally required for approvals and escalations. The kernel does 
 | `list_pending_approvals(for_actor?)` | `approvals:read` | pending `ApprovalRequest`s with projected effects and requester |
 | `request_approval(document_type, document_id, reason)` | any write scope | created automatically by the dispatcher on `REQUIRES_APPROVAL`; also callable explicitly; emits `approval.requested` |
 | `approve_purchase_order(po_id, comment)` | `procurement:approve` (human token) | resolves the request, transitions the PO; `po_approver_differs` still applies |
-| `reject_approval(request_id, reason)` | `procurement:approve` | marks rejected; emits `approval.rejected`; originating agent sees it via events |
+| `reject_approval(request_id, reason)` | `procurement:approve` | marks rejected (any kind); emits `approval.rejected`; originating agent sees it via events |
+| `accept_goods(request_id, accepted_lines, comment)` | `procurement:receive` (human token) | resolves a `goods_acceptance` request by posting the goods receipt at the counted quantities: per line `expected_qty`, accepted `qty`, `damaged_qty`, `short_qty`, `over_qty` are recorded; over-shipments are received; the human is the actor on the receipt; emits `goods.received`, `goods.accepted` |
+| `reject_goods(request_id, reason)` | `procurement:receive` (human token) | closes a `goods_acceptance` request without posting; the PO stays approved; emits `goods.rejected` |
 
-Rules: approval tools reject `kind=agent` tokens in the POC (policy `human_approval_only`); the A2A agent returns `input-required` with the `ApprovalRequest` id so a delegating agent can hand it to a person. Pending requests expire after `ANERP_APPROVAL_TTL_HOURS` (default 72).
+Rules: approval tools (`approve_purchase_order`, `reject_approval`, `accept_goods`, `reject_goods`) reject `kind=agent` tokens in the POC (policy `human_approval_only`); the A2A agent returns `input-required` with the `ApprovalRequest` id so a delegating agent can hand it to a person. Pending requests expire after `ANERP_APPROVAL_TTL_HOURS` (default 72). Request kinds: `po_approval` (draft PO above the threshold), `goods_acceptance` (an agent asked to receive goods; a human counts and accepts), `invoice_variance` (a supplier invoice was refused by the three-way match; a human reviews). Requests are deduplicated on `(tool_name, request_hash, status=pending)`, receipted, and idempotent: replaying the key returns the same answer.
 
 ---
 
@@ -405,6 +407,8 @@ Default rules (POC):
 | `period_lock` | all posting tools | deny (`PERIOD_CLOSED`) | posting_date in a closed period |
 | `po_approval_threshold` | `create_purchase_order` | requires_approval | `po.total_cents > 1_000_000` (10,000.00) |
 | `po_approver_differs` | `approve_purchase_order` | deny | `actor.id == po.created_by` (standard four-eyes control) |
+| `goods_acceptance_by_human` | `receive_goods` | requires_approval | `actor.kind == 'agent'` — agents simulate; a human posts (directly, or via `accept_goods` after counting) |
+| `human_approval_only` | `approve_purchase_order`, `reject_approval`, `accept_goods`, `reject_goods` | deny | `actor.kind == 'agent'` |
 | `three_way_match_qty` | `post_supplier_invoice` | deny (`MATCH_VARIANCE_EXCEEDED`) | any line invoice_qty > received − invoiced |
 | `three_way_match_price` | `post_supplier_invoice` | deny above tolerance / warn within | tolerance_pct 2%, tolerance_abs 5000 cents |
 | `customer_credit_limit` | `create_sales_order`, `issue_customer_invoice` | deny (`CREDIT_LIMIT_EXCEEDED`) | open AR + order total > credit_limit |
@@ -478,8 +482,8 @@ ANERP_OTEL_ENABLED=false
 Each task: `id`, `narrative` (what a manager would ask), `seed` (fixture name), `goal_state` (assertions over documents, balances, inventory), `traps` (optional injected conditions: closed period, over-limit customer, price variance, duplicate request), `max_steps`.
 
 Examples:
-- `p2p_01_simple`: order 10 WIDGET-1 from ACME at 50.00, receive all, post matching invoice, pay in full. Goal: AP open item paid; 1300 +500.00; 2000 net 0; 1000 −500.00.
-- `p2p_04_over_threshold`: PO of 15,000.00 → must surface `REQUIRES_APPROVAL` and either obtain approval via a second actor token or stop with a clear hand-off.
+- `p2p_01_simple`: order 10 VALVE-2IN from ACME at 50.00, have them received (the harness plays the warehouse: `accept_goods` at the expected quantities unless the task overrides a count), post the matching invoice for the accepted quantity, pay in full. Goal: AP open item paid; 1300 +500.00; 2000 net 0; 1000 −500.00.
+- `p2p_04_over_threshold`: PO of 12,000.00 (30 PUMP-SM) → must surface `REQUIRES_APPROVAL` and either obtain approval via a second actor token or stop with a clear hand-off.
 - `p2p_06_price_variance_5pct`: invoice 5% above PO price → must not post; must report variance amount.
 - `o2c_02_credit_limit`: order exceeds credit limit → must not create; must propose payment-first or reduced qty.
 - `o2c_05_out_of_stock`: shipment beyond on-hand → must not ship; must propose receiving goods.
@@ -509,7 +513,7 @@ Each phase ends with green tests and a commit. Do not start a phase before the p
 | Phase | Hours | Deliverables | Definition of done |
 |---|---|---|---|
 | 0 Scaffold (cloud-first) | 3 | `uv` project, package layout (§17), `.devcontainer/` for Codespaces, ruff/mypy/pytest config, GitHub Actions (test + deploy), Dockerfile, LICENSE, README stub, `CITATION.cff`, `.env.example`, committed `.mcp.json` with `${ANERP_ADMIN_TOKEN}` | `uv run pytest` passes on an empty suite; CI green; `GET /healthz` reachable on the `dev` host |
-| 1 Kernel data + ledger | 6 | SQLModel models (§5) incl. `ApiToken`/`ApprovalRequest`, Alembic migration 0001, seed script (chart of accounts, 2 suppliers, 2 customers, 4 items, periods for current year), `ledger.post_journal_entry`, trial balance, hypothesis tests for §8.1 | TB balanced under random JE generation; reversal test passes; migration applies on hosted Postgres |
+| 1 Kernel data + ledger | 6 | SQLModel models (§5) incl. `ApiToken`/`ApprovalRequest`, Alembic migration 0001, seed script (chart of accounts, the master data in Amendment A, periods 2025–2027 with 2026-08 closed), `ledger.post_journal_entry`, trial balance, hypothesis tests for §8.1 | TB balanced under random JE generation; reversal test passes; migration applies on hosted Postgres |
 | 2 Dispatcher + envelope + auth | 5 | `core.dispatch`, envelope models, error taxonomy, idempotency store, receipt signing + `verify_receipt`, event log, token auth with bootstrap admin, `mint_token`/`revoke_token`/`get_system_status` | Simulate has zero DB writes (assert via row counts); replay returns identical receipt; conflict detected; admin token mints a scoped agent token |
 | 3 Policy engine | 3 | YAML loader, safe evaluator, default rules (§9), unit tests per rule | Every rule has a passing deny/allow/approval test |
 | 4 Procurement module | 6 | all §7.2 tools with simulate + commit, three-way match, PO status machine | End-to-end P2P test incl. variance-within-tolerance and blocked cases |
@@ -628,3 +632,67 @@ anerp/
 - Logs go to the host's log drain; no request bodies above `INFO` (§11 redaction).
 - Backups: rely on the hosted Postgres provider's point-in-time recovery; document the restore drill in README.
 - Cost guardrail for the POC: smallest instance sizes; the ERP is I/O-light. LLM spend is bounded by the eval matrix size, not by the ERP.
+
+
+---
+
+## Amendment A (2026-09-10): human goods acceptance and demo master data
+
+**Why.** Goods receipts move stock and money on the strength of what physically arrived. That count is a
+human act in the warehouse, so the kernel no longer lets an agent post a receipt: agents *simulate*, humans
+*post*. The same human-in-the-loop contract (§7.9) now covers three kinds of decision.
+
+**A.1 `ApprovalRequest.kind`** ∈ {`po_approval`, `goods_acceptance`, `invoice_variance`} (migration 0003, with
+`payload_json` holding the original payload and `document_id` nullable). `list_pending_approvals` filters by
+kind; `request_approval` takes a kind.
+
+**A.2 Tools.** `accept_goods(request_id, accepted_lines, comment)` and `reject_goods(request_id, reason)` are
+human-only (`human_approval_only`, scope `procurement:receive`). `accept_goods` commits the goods receipt at the
+counted quantities with the human as actor; each GRN line records `expected_qty`, accepted `qty`, `damaged_qty`,
+`short_qty`, `over_qty` and a note. Damaged units are recorded but not received; over-shipments are received
+(PO `received_qty` may exceed `qty`); short deliveries leave the PO `partially_received`. Omitting
+`accepted_lines` accepts the expected quantities.
+
+**A.3 `receive_goods`.** Scope `procurement:receive`. A human token posts directly. An agent may simulate it
+(simulate stays zero-write and reports `policy.decision=requires_approval`); an agent *commit* posts nothing and
+parks a `goods_acceptance` request that holds the projection and payload (rule `goods_acceptance_by_human`),
+returning `REQUIRES_APPROVAL` with the request id. Parked requests are deduplicated on tool and payload hash,
+receipted, and idempotent.
+
+**A.4 Three-way match** uses accepted quantities: `invoice_qty ≤ received_qty − invoiced_qty` where
+`received_qty` is what humans accepted.
+
+**A.5 Scope `procurement:receive`** gates `receive_goods`, `accept_goods` and `reject_goods`. Agent tokens
+should hold it so they can simulate and park; only human tokens can post.
+
+**A.6 Invoice variance.** When `post_supplier_invoice` is refused by `three_way_match_qty` or
+`three_way_match_price`, the dispatcher parks an `invoice_variance` request (deduplicated, receipted) and still
+returns `MATCH_VARIANCE_EXCEEDED` with `details.approval_request_id`. A human resolves it by correcting the
+invoice and posting again, or by `reject_approval`. (`park_if_blocked` still persists a `blocked` invoice with
+no GL effect for the close-readiness blocker.)
+
+**A.7 Baseline seed (replaces §15 phase 1's seed).**
+
+| Kind | Code | Name | Terms / limit | Cost | Price | On hand |
+|---|---|---|---|---|---|---|
+| Supplier | ACME | ACME Industrial | 30 days | | | |
+| Supplier | BOLT | Boltworks Ltd | 45 days | | | |
+| Customer | NORTH | Northgate Marine | credit 25,000.00, 30 days | | | |
+| Customer | HARB | Harborline Yachts | credit 5,000.00, 14 days | | | |
+| Item | PUMP-SM | Bilge pump, small | | 400.00 | 650.00 | 0 |
+| Item | VALVE-2IN | Ball valve 2 inch | | 50.00 | 80.00 | 5 |
+| Item | HOSE-10M | Reinforced hose 10 m | | 25.00 | 40.00 | 40 |
+| Item | FLANGE-4 | Flange 4 bolt | | 15.00 | 24.00 | 100 |
+
+Periods 2025–2027 exist; **2026-08 is closed**, 2026-09 is open. Opening capital 250,000.00; opening stock
+arrives through the dispatcher (PO-000001 from ACME, received by the seed's admin actor, invoiced and paid).
+
+**A.8 Dispatcher generalisation.** A write tool declares `approval_kind` (the kind parked on
+`requires_approval`) and `park_on_deny` (policy error codes that park a request of a kind while the error is
+still returned); a projection may name its `approval_target` (the PO for a receipt) so a parked request points
+at a persisted document.
+
+**A.9 Eval harness.** Tasks may declare `human_loop: [goods_acceptance, po_approval]` and per-SKU `acceptance`
+overrides; after each agent round the harness plays the human (accepts deliveries or approves POs), then gives
+the agent a status update and another round (`max_rounds`, default 3). A `pending_approvals` goal check counts
+requests by kind.

@@ -30,18 +30,20 @@ CHART_OF_ACCOUNTS = [
 SEED_ACTOR = "system:seed"
 
 
+SEED_YEARS = (2025, 2026, 2027)
+CLOSED_PERIOD = "2026-08"  # the baseline fixture keeps 2026-08 closed and 2026-09 open
+
+
 def seed_kernel(session: Session, year: int | None = None) -> dict[str, int]:
-    """Chart of accounts and fiscal periods for this year and next. Idempotent."""
+    """Chart of accounts and fiscal periods (2025-2027 plus the current year). Idempotent."""
     year = year or utcnow().year
     accounts = 0
     for code, name, type_ in CHART_OF_ACCOUNTS:
         if session.exec(select(Account).where(Account.code == code)).first() is None:
             session.add(Account(code=code, name=name, type=type_))
             accounts += 1
-    periods = (
-        len(ensure_periods(session, year - 1))
-        + len(ensure_periods(session, year))
-        + len(ensure_periods(session, year + 1))
+    periods = sum(
+        len(ensure_periods(session, y)) for y in sorted({*SEED_YEARS, year - 1, year, year + 1})
     )
     session.flush()
     return {"accounts": accounts, "periods": periods}
@@ -71,9 +73,24 @@ def _call(
     return result
 
 
+SUPPLIERS = (("ACME", "ACME Industrial", 30), ("BOLT", "Boltworks Ltd", 45))
+CUSTOMERS = (
+    ("NORTH", "Northgate Marine", "25000.00", 30),
+    ("HARB", "Harborline Yachts", "5000.00", 14),
+)
+ITEMS = (  # sku, name, standard cost, list price, opening on-hand
+    ("PUMP-SM", "Bilge pump, small", "400.00", "650.00", 0),
+    ("VALVE-2IN", "Ball valve 2 inch", "50.00", "80.00", 5),
+    ("HOSE-10M", "Reinforced hose 10 m", "25.00", "40.00", 40),
+    ("FLANGE-4", "Flange 4 bolt", "15.00", "24.00", 100),
+)
+
+
 def seed_fixture(
     session: Session, name: str = "baseline", actor_id: str = SEED_ACTOR
 ) -> dict[str, Any]:
+    """`empty`: chart of accounts and periods only. `baseline`: the demo master data, opening capital,
+    opening stock received through the dispatcher, and period 2026-08 closed."""
     counts = seed_kernel(session)
     if name == "empty":
         session.commit()
@@ -81,10 +98,7 @@ def seed_fixture(
     if name != "baseline":
         raise ValueError(f"unknown fixture {name}")
     steps = 0
-    for code, sname, terms in (
-        ("ACME", "ACME Industrial Supply", 30),
-        ("NORTHWIND", "Northwind Components", 45),
-    ):
+    for code, sname, terms in SUPPLIERS:
         _call(
             session,
             "create_supplier",
@@ -93,10 +107,7 @@ def seed_fixture(
             f"supplier:{code}",
         )
         steps += 1
-    for code, cname, limit, terms in (
-        ("GLOBEX", "Globex Corporation", "25000.00", 30),
-        ("INITECH", "Initech LLC", "5000.00", 14),
-    ):
+    for code, cname, limit, terms in CUSTOMERS:
         _call(
             session,
             "create_customer",
@@ -105,12 +116,7 @@ def seed_fixture(
             f"customer:{code}",
         )
         steps += 1
-    for sku, iname, cost, price, stocked in (
-        ("WIDGET-1", "Standard widget", "50.00", "80.00", True),
-        ("GADGET-2", "Precision gadget", "120.00", "200.00", True),
-        ("BOLT-3", "Hex bolt M8", "1.00", "2.50", True),
-        ("SERVICE-HR", "Consulting hour", "0.00", "150.00", False),
-    ):
+    for sku, iname, cost, price, _on_hand in ITEMS:
         _call(
             session,
             "create_item",
@@ -119,13 +125,12 @@ def seed_fixture(
                 "name": iname,
                 "standard_cost": cost,
                 "list_price": price,
-                "is_stocked": stocked,
+                "is_stocked": True,
             },
             actor_id,
             f"item:{sku}",
         )
         steps += 1
-    # Opening capital and opening stock, both through the dispatcher.
     _call(
         session,
         "post_journal_entry",
@@ -140,39 +145,31 @@ def seed_fixture(
         "opening-capital",
     )
     steps += 1
+    stock_lines = [
+        {"sku": sku, "qty": on_hand, "unit_cost": cost}
+        for sku, _n, cost, _p, on_hand in ITEMS
+        if on_hand > 0
+    ]
     po = _call(
         session,
         "create_purchase_order",
-        {
-            "supplier": "ACME",
-            "lines": [
-                {"sku": "WIDGET-1", "qty": 100, "unit_cost": "50.00"},
-                {"sku": "GADGET-2", "qty": 20, "unit_cost": "120.00"},
-                {"sku": "BOLT-3", "qty": 1000, "unit_cost": "1.00"},
-            ],
-            "memo": "Opening stock",
-        },
+        {"supplier": "ACME", "lines": stock_lines, "memo": "Opening stock"},
         actor_id,
         "opening-po",
     )
     po_number = po["document"]["number"]
-    _call(session, "receive_goods", {"po": po_number}, actor_id, "opening-grn")
+    _call(
+        session, "receive_goods", {"po": po_number}, actor_id, "opening-grn"
+    )  # admin actor: posts directly
     inv = _call(
         session,
         "post_supplier_invoice",
-        {
-            "po": po_number,
-            "supplier_reference": "ACME-0001",
-            "lines": [
-                {"sku": "WIDGET-1", "qty": 100, "unit_cost": "50.00"},
-                {"sku": "GADGET-2", "qty": 20, "unit_cost": "120.00"},
-                {"sku": "BOLT-3", "qty": 1000, "unit_cost": "1.00"},
-            ],
-        },
+        {"po": po_number, "supplier_reference": "ACME-0001", "lines": stock_lines},
         actor_id,
         "opening-sinv",
     )
     _call(session, "pay_supplier", {"invoice": inv["document"]["number"]}, actor_id, "opening-pay")
-    steps += 4
+    _call(session, "close_period", {"period": CLOSED_PERIOD}, actor_id, f"close:{CLOSED_PERIOD}")
+    steps += 5
     counts["dispatched_steps"] = steps
     return counts

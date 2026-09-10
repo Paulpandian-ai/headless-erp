@@ -105,6 +105,10 @@ def check_goal(
             elif kind == "tb_balanced":
                 actual = q("get_trial_balance", {})["is_balanced"]
                 ok = bool(actual)
+            elif kind == "pending_approvals":
+                payload = {"kind": g["kind"]} if g.get("kind") else {}
+                actual = q("list_pending_approvals", payload)["count"]
+                ok = actual == g["expected"]
             elif kind == "report_mentions":
                 text = (trace.final_text or "").lower()
                 actual = [w for w in g["any_of"] if str(w).lower() in text]

@@ -1,19 +1,19 @@
 id: o2c_06_payment_reversal
 module: sales
 narrative: >
-  The bank returned GLOBEX's cheque for the WIDGET-1 invoice we recorded as paid this morning.
+  The bank returned NORTH's cheque for the VALVE-2IN invoice we recorded as paid this morning.
   Put the books right: the invoice must be open again for its full amount and cash must not
   include the bounced receipt.
 seed: baseline
 max_steps: 16
 traps: [recovery]
 setup:
-  - {tool: create_sales_order, payload: {customer: GLOBEX, lines: [{sku: WIDGET-1, qty: 2}]}, save_as: so}
+  - {tool: create_sales_order, payload: {customer: NORTH, lines: [{sku: VALVE-2IN, qty: 2}]}, save_as: so}
   - {tool: ship_order, payload: {so: "$so"}}
   - {tool: issue_customer_invoice, payload: {so: "$so"}, save_as: inv}
   - {tool: record_customer_payment, payload: {invoice: "$inv"}}
 goal_state:
   - {check: count, type: CustomerPayment, where: {status: reversed}, expected: 1}
-  - {check: open_items, kind: ar, party: GLOBEX, total_remaining_cents: 16000}
+  - {check: open_items, kind: ar, party: NORTH, total_remaining_cents: 16000}
   - {check: balance_delta, account: "1000", delta_cents: -16000}
   - {check: tb_balanced}

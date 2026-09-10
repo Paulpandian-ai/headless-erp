@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import JSON, Column
 from sqlmodel import Field
 
 from anerp.db import KernelRow
 
+APPROVAL_KINDS = ("po_approval", "goods_acceptance", "invoice_variance")
+
 
 class ApprovalRequest(KernelRow, table=True):
     __tablename__ = "approval_request"
+    kind: str = Field(default="po_approval", max_length=32, index=True)
     document_type: str = Field(max_length=32, index=True)
     # None when the request was raised for a document that was never persisted (the tool could
     # not hold a pending version); the projection lives in projected_effects_json instead.
@@ -19,6 +23,7 @@ class ApprovalRequest(KernelRow, table=True):
     document_number: str | None = Field(default=None, max_length=16)
     tool_name: str = Field(max_length=64)
     request_hash: str | None = Field(default=None, max_length=80, index=True)
+    payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     requested_by: str = Field(max_length=128)
     reason: str = ""
     projected_effects_json: dict = Field(default_factory=dict, sa_column=Column(JSON))

@@ -117,6 +117,11 @@ class Projection:
     # persist a pending version of the document instead of refusing (create_purchase_order).
     on_requires_approval: Callable[[], None] | None = None
     approval_reason: str | None = None
+    # The persisted document a parked ApprovalRequest should point at when the primary effect is a
+    # creation (e.g. receive_goods parks against the PurchaseOrder). Defaults to the primary
+    # document when that one already exists.
+    approval_target: Any | None = None
+    approval_target_type: str | None = None
     # Returned once in the commit response, never stored in receipts or idempotency records.
     secret: dict[str, Any] | None = None
     # Admin-only escape hatches, still inside the single dispatcher transaction / receipt:

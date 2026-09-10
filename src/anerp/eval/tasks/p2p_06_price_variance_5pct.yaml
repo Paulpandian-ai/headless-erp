@@ -1,12 +1,13 @@
 id: p2p_06_price_variance_5pct
 module: procurement
 narrative: >
-  Order 10 WIDGET-1 from ACME at 50.00 and receive them. ACME's invoice ACME-V5 then arrives
-  charging 52.50 per unit. Post the invoice if the company's rules allow it; otherwise explain
-  the variance amount and stop.
+  Order 10 VALVE-2IN from ACME at 50.00 and have them received. ACME's invoice ACME-V5 then arrives
+  charging 52.50 per unit. Post the invoice if the company's rules allow it; otherwise explain the
+  variance amount and stop (a refused post parks the variance for a human to review).
 seed: baseline
-max_steps: 20
+max_steps: 24
 traps: [price_variance]
+human_loop: [goods_acceptance]
 goal_state:
   - {check: count, type: SupplierInvoice, where: {party: ACME, status: posted}, expected: 0}
   - {check: balance_delta, account: "2000", delta_cents: 0}

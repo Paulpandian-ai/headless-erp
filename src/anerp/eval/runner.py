@@ -141,6 +141,72 @@ def apply_setup(env: Environment, task: dict[str, Any]) -> None:
             saved[step["save_as"]] = r["document"]["number"]
 
 
+def human_step(env: Environment, task: dict[str, Any]) -> list[str]:
+    """Play the human in the loop for the kinds the task allows: the warehouse counts and accepts
+    deliveries (at the expected quantities unless `acceptance` overrides a SKU), and an approver
+    approves draft POs. Returns human-readable status lines for the agent's next round."""
+    updates: list[str] = []
+    kinds = task.get("human_loop") or []
+    if not kinds:
+        return updates
+    pending = env.admin_query("list_pending_approvals", {})["pending"]
+    overrides = {o["sku"]: o for o in task.get("acceptance", [])}
+    for req in pending:
+        if req["kind"] == "goods_acceptance" and "goods_acceptance" in kinds:
+            expected = {
+                line["sku"]: int(line["qty"])
+                for line in (req.get("payload") or {}).get("lines") or []
+            }
+            if not expected:
+                po = env.admin_query("get_document", {"id_or_number": req["document_id"]})
+                expected = {
+                    line["sku"]: line["qty"] - line["received_qty"]
+                    for line in po["lines"]
+                    if line["qty"] > line["received_qty"]
+                }
+            accepted = [
+                {
+                    "sku": sku,
+                    "qty": overrides.get(sku, {}).get("qty", qty),
+                    "damaged_qty": overrides.get(sku, {}).get("damaged_qty", 0),
+                    "note": overrides.get(sku, {}).get("note", ""),
+                }
+                for sku, qty in expected.items()
+            ]
+            r = env.admin_commit(
+                "accept_goods",
+                {
+                    "request_id": req["id"],
+                    "accepted_lines": accepted,
+                    "comment": "counted by the warehouse (eval harness)",
+                },
+            )
+            counts = ", ".join(
+                f"{a['sku']} x{a['qty']}"
+                + (f" ({a['damaged_qty']} damaged)" if a["damaged_qty"] else "")
+                for a in accepted
+            )
+            updates.append(
+                f"the warehouse accepted delivery {r['document']['number']} for purchase order {req['document_number']}: {counts}"
+            )
+        elif req["kind"] == "po_approval" and "po_approval" in kinds:
+            env.admin_commit(
+                "approve_purchase_order",
+                {"po": req["document_id"], "comment": "approved (eval harness)"},
+            )
+            updates.append(f"purchase order {req['document_number']} was approved")
+    return updates
+
+
+def _merge(trace: RunTrace, part: RunTrace) -> None:
+    trace.tool_calls.extend(part.tool_calls)
+    trace.input_tokens += part.input_tokens
+    trace.output_tokens += part.output_tokens
+    trace.steps += part.steps
+    trace.final_text = part.final_text
+    trace.error = part.error or trace.error
+
+
 def run_one(
     env: Environment, client: Any, server: str, task: dict[str, Any], run: int
 ) -> dict[str, Any]:
@@ -152,25 +218,35 @@ def run_one(
     surface = env.surface(server)
     t0 = time.perf_counter()
     trace = RunTrace()
+    rounds = 0
     try:
+        narrative = task["narrative"]
         for _ in range(int(task.get("repeat", 1))):
-            part = client.run(
-                task["narrative"],
-                surface,
-                max_steps=task["max_steps"],
-                task_id=f"{task['id']}__{run}",
+            _merge(
+                trace,
+                client.run(
+                    narrative, surface, max_steps=task["max_steps"], task_id=f"{task['id']}__{run}"
+                ),
             )
-            trace.tool_calls.extend(part.tool_calls)
-            trace.input_tokens += part.input_tokens
-            trace.output_tokens += part.output_tokens
-            trace.steps += part.steps
-            trace.final_text = part.final_text
-            trace.error = part.error or trace.error
+            rounds += 1
+        for _ in range(int(task.get("max_rounds", 3)) - 1):
+            updates = human_step(env, task) if server == "treatment" else []
+            if not updates:
+                break
+            narrative = f"{task['narrative']} Status update: {'; '.join(updates)}. Continue from there; do not repeat what is already done."
+            _merge(
+                trace,
+                client.run(
+                    narrative, surface, max_steps=task["max_steps"], task_id=f"{task['id']}__{run}"
+                ),
+            )
+            rounds += 1
     except Exception as exc:  # noqa: BLE001
         log.exception("client %s failed on %s", client.name, task["id"])
         trace.error = f"{type(exc).__name__}: {exc}"
     wall = time.perf_counter() - t0
     metrics = run_metrics(q, task, before, trace, server, wall)
+    metrics["rounds"] = rounds
     return {
         "server": server,
         "client": client.name,

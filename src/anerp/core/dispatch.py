@@ -561,8 +561,25 @@ def _commit(
         _check_simulation(envelope.simulation_id, tool.name, req_hash, state_versions)
 
     if policy.decision == "deny":
+        code = ErrorCode(policy.error_code or "POLICY_DENIED")
+        if code.value in tool.park_on_deny:
+            return _standalone_approval(
+                session,
+                tool,
+                projection,
+                actor,
+                policy,
+                envelope,
+                req_hash,
+                before_hash,
+                request_id,
+                base_log,
+                timer,
+                kind=tool.park_on_deny[code.value],
+                error_code=code,
+            )
         raise AnerpError(
-            ErrorCode(policy.error_code or "POLICY_DENIED"),
+            code,
             "; ".join(policy.reasons) or "denied by policy",
             {
                 "policy": policy.as_dict(),
@@ -634,6 +651,7 @@ def _commit(
     approval_request: ApprovalRequest | None = None
     if pending_approval and primary is not None:
         approval_request = ApprovalRequest(
+            kind=tool.approval_kind,
             document_type=primary.type,
             document_id=primary.instance.id,
             document_number=getattr(primary.instance, "number", None),
@@ -855,6 +873,9 @@ def _standalone_approval(
     request_id: str,
     base_log: dict[str, Any],
     timer: _Timer,
+    *,
+    kind: str | None = None,
+    error_code: ErrorCode = ErrorCode.REQUIRES_APPROVAL,
 ) -> dict[str, Any]:
     """Approval needed but the tool cannot persist a pending version.
 
@@ -865,9 +886,15 @@ def _standalone_approval(
     granted the agent commits again with a new key.
     """
     assert envelope.idempotency_key is not None
+    kind = kind or tool.approval_kind
     session.rollback()
     primary = projection.primary
-    persisted_target = primary is not None and primary.action == "update"
+    target = projection.approval_target
+    target_type = projection.approval_target_type or (
+        type(target).__name__ if target is not None else None
+    )
+    if target is None and primary is not None and primary.action == "update":
+        target, target_type = primary.instance, primary.type
     pending = session.exec(
         select(ApprovalRequest).where(
             ApprovalRequest.tool_name == tool.name,
@@ -878,13 +905,13 @@ def _standalone_approval(
     deduplicated = pending is not None
     if pending is None:
         pending = ApprovalRequest(
-            document_type=primary.type if primary else tool.name,
-            document_id=primary.instance.id if (primary and persisted_target) else None,
-            document_number=getattr(primary.instance, "number", None)
-            if (primary and persisted_target)
-            else None,
+            document_type=target_type or (primary.type if primary else tool.name),
+            document_id=target.id if target is not None else None,
+            document_number=getattr(target, "number", None) if target is not None else None,
             tool_name=tool.name,
+            kind=kind,
             request_hash=req_hash,
+            payload_json=envelope.payload,
             requested_by=actor.id,
             reason="; ".join(policy.reasons),
             projected_effects_json=_projection_dict(projection, committed=False),
@@ -945,17 +972,25 @@ def _standalone_approval(
             "deduplicated": deduplicated,
         },
     )
+    next_step = {
+        "goods_acceptance": "a human counts the delivery and calls accept_goods (or reject_goods) with this request id",
+        "invoice_variance": "a human reviews the variance: correct the invoice and post again, or reject_approval",
+    }.get(
+        kind,
+        "a human approver decides via the approval inbox; then commit again with a new idempotency_key",
+    )
     err = AnerpError(
-        ErrorCode.REQUIRES_APPROVAL,
+        error_code,
         "; ".join(policy.reasons) or "approval required",
         {
             "policy": policy.as_dict(),
             "approval_request_id": pending.id,
+            "approval_kind": kind,
             "approval_request_status": pending.status,
             "deduplicated": deduplicated,
             "receipt_id": receipt.id,
             "projected_effects": _projection_dict(projection, committed=False),
-            "next_step": "a human approver decides via the approval inbox; then commit again with a new idempotency_key",
+            "next_step": next_step,
         },
     )
     response = _jsonable(

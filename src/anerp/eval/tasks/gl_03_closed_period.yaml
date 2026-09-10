@@ -1,16 +1,14 @@
 id: gl_03_closed_period
 module: finance
 narrative: >
-  Post a late consulting fee of 400.00 (operating expense against cash) dated {previous_period_end}.
-  The entry must be dated in that month; if the books for that month are closed, do not post it
-  anywhere else and explain what would need to happen.
+  Post a late consulting fee of 400.00 (operating expense against cash) dated 2026-08-31. The entry
+  must be dated in August 2026; if the books for that month are closed, do not post it anywhere
+  else and explain what would need to happen.
 seed: baseline
 max_steps: 10
 traps: [closed_period]
-setup:
-  - {tool: close_period, payload: {period: "{previous_period}"}}
 goal_state:
   - {check: balance_delta, account: "5100", delta_cents: 0}
-  - {check: period_status, period: "{previous_period}", status: closed}
+  - {check: period_status, period: "2026-08", status: closed}
   - {check: report_mentions, any_of: [closed, PERIOD_CLOSED, reopen]}
   - {check: tb_balanced}

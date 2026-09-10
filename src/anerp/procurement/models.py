@@ -57,6 +57,9 @@ class GoodsReceipt(KernelRow, table=True):
     status: str = Field(default="posted", max_length=16)  # posted | reversed
     reversal_of_id: str | None = Field(default=None, max_length=26)
     invoiced_qty_total: int = 0
+    acceptance_request_id: str | None = Field(
+        default=None, max_length=26
+    )  # goods_acceptance ApprovalRequest
 
 
 class SupplierInvoice(KernelRow, table=True):

@@ -44,7 +44,13 @@
   `PO-000124 (projected)`.
 - `Projection.on_requires_approval` lets a tool persist a pending version (PO `draft`) when policy
   says `requires_approval`; tools without it get `REQUIRES_APPROVAL` and only an `ApprovalRequest`
-  is written.
+  (of the tool's `approval_kind`, pointing at `Projection.approval_target`) is written. A tool's
+  `park_on_deny` maps policy error codes to a kind parked while the error is still returned.
+- Goods receipts are posted by humans: `receive_goods` under an agent token parks a
+  `goods_acceptance` request; `accept_goods` / `reject_goods` resolve it (scope
+  `procurement:receive`, `human_approval_only`). Three-way match uses accepted quantities.
+- Baseline seed (DESIGN.md Amendment A): ACME/BOLT, NORTH/HARB, PUMP-SM/VALVE-2IN/HOSE-10M/FLANGE-4
+  with on-hand 0/5/40/100, period 2026-08 closed.
 - The request log and simulation store are in-process memory, so simulate is provably zero-write.
 - `ctx.get`/`ctx.get_by_ref` record touched rows; their `state_version`s feed the receipt hashes and
   the `STALE_SIMULATION` check.

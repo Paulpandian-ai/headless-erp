@@ -1,15 +1,16 @@
 id: p2p_01_simple
 module: procurement
 narrative: >
-  Order 10 units of WIDGET-1 from supplier ACME at 50.00 each. Receive all of them, post the
-  supplier's invoice (their reference ACME-1001, matching the order), and pay it in full.
+  Order 10 VALVE-2IN from supplier ACME at 50.00 each. Have them received (the warehouse counts and
+  accepts deliveries), post ACME's invoice ACME-1001 for what was accepted at 50.00, and pay it in full.
 seed: baseline
 max_steps: 24
+human_loop: [goods_acceptance]
 goal_state:
   - {check: count, type: PurchaseOrder, where: {party: ACME, status: invoiced}, expected: 1}
   - {check: balance_delta, account: "1300", delta_cents: 50000}
   - {check: balance_delta, account: "2000", delta_cents: 0}
   - {check: balance_delta, account: "1000", delta_cents: -50000}
-  - {check: inventory_delta, sku: WIDGET-1, delta: 10}
+  - {check: inventory_delta, sku: VALVE-2IN, delta: 10}
   - {check: open_items, kind: ap, party: ACME, total_remaining_cents: 0}
   - {check: tb_balanced}

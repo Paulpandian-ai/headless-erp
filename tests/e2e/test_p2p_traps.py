@@ -4,46 +4,41 @@ from __future__ import annotations
 
 from tests.conftest import ADMIN, Client, tb_balanced
 
+PUMPS_OVER_THRESHOLD = [{"sku": "PUMP-SM", "qty": 30, "unit_cost": "400.00"}]  # 12,000.00
+
 
 def test_over_threshold_requires_human_approval(kernel, agent: Client, human: Client) -> None:
-    sim = agent.simulate(
-        "create_purchase_order",
-        supplier="ACME",
-        lines=[{"sku": "GADGET-2", "qty": 125, "unit_cost": "120.00"}],
+    sim = agent.simulate("create_purchase_order", supplier="ACME", lines=PUMPS_OVER_THRESHOLD)
+    assert (
+        sim["policy"]["decision"] == "requires_approval"
+        and "po_approval_threshold" in sim["policy"]["rules_triggered"]
     )
-    assert sim["policy"]["decision"] == "requires_approval"
-    assert "po_approval_threshold" in sim["policy"]["rules_triggered"]
-    po = agent.ok(
-        "create_purchase_order",
-        supplier="ACME",
-        lines=[{"sku": "GADGET-2", "qty": 125, "unit_cost": "120.00"}],
-    )
-    assert po["document"]["status"] == "draft"
-    assert po["approval_request"]["status"] == "pending"
+    po = agent.ok("create_purchase_order", supplier="ACME", lines=PUMPS_OVER_THRESHOLD)
+    assert po["document"]["status"] == "draft" and po["approval_request"]["status"] == "pending"
     assert "approval.requested" in [e["type"] for e in po["events_emitted"]]
     number = po["document"]["number"]
-    blocked = agent.commit("receive_goods", po=number)
-    assert blocked["error"]["code"] == "PRECONDITION_FAILED"
-    # agent tokens cannot approve
+    assert human.commit("receive_goods", po=number)["error"]["code"] == "PRECONDITION_FAILED"
     denied = agent.commit("approve_purchase_order", po=number)
     assert (
         denied["error"]["code"] == "POLICY_DENIED"
         and "human_approval_only" in denied["error"]["details"]["policy"]["rules_triggered"]
     )
     pending = human.query("list_pending_approvals")
-    assert pending["count"] == 1 and pending["pending"][0]["document_number"] == number
-    # the creator cannot approve their own PO even as a human
+    assert (
+        pending["count"] == 1
+        and pending["pending"][0]["document_number"] == number
+        and pending["pending"][0]["kind"] == "po_approval"
+    )
     self_approve = Client(type(ADMIN)(id="agent:test", kind="human")).commit(
         "approve_purchase_order", po=number
     )
-    assert (
-        self_approve["error"]["code"] == "POLICY_DENIED"
-        and "po_approver_differs" in self_approve["error"]["details"]["policy"]["rules_triggered"]
-    )
+    assert "po_approver_differs" in self_approve["error"]["details"]["policy"]["rules_triggered"]
     approved = human.ok("approve_purchase_order", po=number, comment="ok")
-    assert approved["document"]["status"] == "approved"
-    assert human.query("list_pending_approvals")["count"] == 0
-    assert agent.ok("receive_goods", po=number)["ok"]
+    assert (
+        approved["document"]["status"] == "approved"
+        and human.query("list_pending_approvals")["count"] == 0
+    )
+    assert human.ok("receive_goods", po=number)["ok"]
     assert tb_balanced(agent)
 
 
@@ -51,10 +46,9 @@ def test_reject_approval(kernel, agent: Client, human: Client) -> None:
     po = agent.ok(
         "create_purchase_order",
         supplier="ACME",
-        lines=[{"sku": "GADGET-2", "qty": 200, "unit_cost": "120.00"}],
+        lines=[{"sku": "PUMP-SM", "qty": 40, "unit_cost": "400.00"}],
     )
-    req_id = po["approval_request"]["id"]
-    rejected = human.ok("reject_approval", request_id=req_id, reason="budget")
+    rejected = human.ok("reject_approval", request_id=po["approval_request"]["id"], reason="budget")
     assert rejected["document"]["status"] == "rejected"
     events = agent.query("poll_events", after_seq=0, types=["approval.rejected"])
     assert events["count"] == 1 and events["events"][0]["payload"]["requested_by"] == "agent:test"
@@ -66,20 +60,19 @@ def test_reject_approval(kernel, agent: Client, human: Client) -> None:
     )
 
 
-def test_price_variance_within_and_outside_tolerance(kernel, agent: Client) -> None:
+def test_price_variance_within_and_outside_tolerance(kernel, agent: Client, human: Client) -> None:
     po = agent.ok(
         "create_purchase_order",
         supplier="ACME",
-        lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
     )
     number = po["document"]["number"]
-    agent.ok("receive_goods", po=number)
-    # 5% above -> blocked
+    human.ok("receive_goods", po=number)
     sim = agent.simulate(
         "post_supplier_invoice",
         po=number,
         supplier_reference="V1",
-        lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "52.50"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "52.50"}],
     )
     assert (
         sim["policy"]["decision"] == "deny"
@@ -90,46 +83,52 @@ def test_price_variance_within_and_outside_tolerance(kernel, agent: Client) -> N
         "post_supplier_invoice",
         po=number,
         supplier_reference="V1",
-        lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "52.50"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "52.50"}],
     )
-    assert res["error"]["code"] == "MATCH_VARIANCE_EXCEEDED"
-    # 1% above -> within tolerance, variance to 5200
+    assert (
+        res["error"]["code"] == "MATCH_VARIANCE_EXCEEDED"
+        and res["error"]["details"]["approval_kind"] == "invoice_variance"
+    )
+    parked = human.query("list_pending_approvals", kind="invoice_variance")
+    assert parked["count"] == 1 and parked["pending"][0]["payload"]["supplier_reference"] == "V1"
     ok = agent.ok(
         "post_supplier_invoice",
         po=number,
         supplier_reference="V2",
-        lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.50"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.50"}],
     )
-    assert ok["document"]["status"] == "posted"
-    assert any("within tolerance" in w for w in ok["warnings"])
+    assert ok["document"]["status"] == "posted" and any(
+        "within tolerance" in w for w in ok["warnings"]
+    )
     assert agent.query("get_account_balance", account_code="5200")["net_cents"] == 500
     assert agent.query("get_account_balance", account_code="2000")["net_cents"] == -50500
-    doc = agent.query("get_document", id_or_number=ok["document"]["number"])
-    assert doc["match_status"] == "variance_within_tolerance"
-    # qty over receipt -> blocked
+    assert (
+        agent.query("get_document", id_or_number=ok["document"]["number"])["match_status"]
+        == "variance_within_tolerance"
+    )
     over = agent.commit(
         "post_supplier_invoice",
         po=number,
         supplier_reference="V3",
-        lines=[{"sku": "WIDGET-1", "qty": 1, "unit_cost": "50.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 1, "unit_cost": "50.00"}],
     )
     assert over["error"]["code"] == "MATCH_VARIANCE_EXCEEDED"
     assert tb_balanced(agent)
 
 
-def test_parked_invoice_blocks_close(kernel, agent: Client) -> None:
+def test_parked_invoice_blocks_close(kernel, agent: Client, human: Client) -> None:
     po = agent.ok(
         "create_purchase_order",
         supplier="ACME",
-        lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "50.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
     )
     number = po["document"]["number"]
-    agent.ok("receive_goods", po=number)
+    human.ok("receive_goods", po=number)
     parked = agent.ok(
         "post_supplier_invoice",
         po=number,
         supplier_reference="P1",
-        lines=[{"sku": "WIDGET-1", "qty": 10, "unit_cost": "60.00"}],
+        lines=[{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "60.00"}],
         park_if_blocked=True,
     )
     assert parked["document"]["status"] == "blocked" and parked["journal_entry"] is None
@@ -147,25 +146,25 @@ def test_parked_invoice_blocks_close(kernel, agent: Client) -> None:
     assert agent.query("get_period", period_code=period)["close_readiness"]["ready"]
 
 
-def test_p2p_reversals(kernel, agent: Client) -> None:
+def test_p2p_reversals(kernel, agent: Client, human: Client) -> None:
     po = agent.ok(
         "create_purchase_order",
-        supplier="NORTHWIND",
-        lines=[{"sku": "BOLT-3", "qty": 100, "unit_cost": "1.00"}],
+        supplier="BOLT",
+        lines=[{"sku": "FLANGE-4", "qty": 100, "unit_cost": "15.00"}],
     )
     number = po["document"]["number"]
-    grn = agent.ok("receive_goods", po=number, lines=[{"sku": "BOLT-3", "qty": 40}])
+    grn = human.ok("receive_goods", po=number, lines=[{"sku": "FLANGE-4", "qty": 40}])
     assert agent.query("get_document", id_or_number=number)["status"] == "partially_received"
     rev = agent.ok("reverse_goods_receipt", grn=grn["document"]["number"], reason="wrong delivery")
     assert rev["document"]["type"] == "GoodsReceipt" and rev["journal_entry"]
     assert agent.query("get_document", id_or_number=number)["status"] == "approved"
     assert agent.query("get_account_balance", account_code="1400")["net_cents"] == 0
-    grn2 = agent.ok("receive_goods", po=number)
+    grn2 = human.ok("receive_goods", po=number)
     sinv = agent.ok(
         "post_supplier_invoice",
         po=number,
-        supplier_reference="N1",
-        lines=[{"sku": "BOLT-3", "qty": 100, "unit_cost": "1.00"}],
+        supplier_reference="B1",
+        lines=[{"sku": "FLANGE-4", "qty": 100, "unit_cost": "15.00"}],
     )
     assert (
         agent.commit("reverse_goods_receipt", grn=grn2["document"]["number"], reason="x")["error"][
@@ -173,7 +172,7 @@ def test_p2p_reversals(kernel, agent: Client) -> None:
         ]
         == "PRECONDITION_FAILED"
     )
-    pay = agent.ok("pay_supplier", invoice=sinv["document"]["number"], amount="40.00")
+    pay = agent.ok("pay_supplier", invoice=sinv["document"]["number"], amount="400.00")
     assert (
         agent.commit("reverse_supplier_invoice", invoice=sinv["document"]["number"], reason="x")[
             "error"
@@ -182,17 +181,18 @@ def test_p2p_reversals(kernel, agent: Client) -> None:
     )
     agent.ok("reverse_supplier_payment", payment=pay["document"]["number"], reason="bounced")
     assert (
-        agent.query("list_open_items", kind="ap", party="NORTHWIND")["total_remaining_cents"]
-        == 10000
+        agent.query("list_open_items", kind="ap", party="BOLT")["total_remaining_cents"] == 150000
     )
     agent.ok("reverse_supplier_invoice", invoice=sinv["document"]["number"], reason="re-post")
     assert agent.query("get_document", id_or_number=number)["status"] == "received"
-    assert agent.query("list_open_items", kind="ap", party="NORTHWIND")["count"] == 0
+    assert agent.query("list_open_items", kind="ap", party="BOLT")["count"] == 0
     assert tb_balanced(agent)
     recon = agent.query("get_reconciliation", kind="gr_ir")
-    assert recon["reconciled"] and recon["subledger_open_cents"] == 10000
+    assert recon["reconciled"] and recon["subledger_open_cents"] == 150000
     assert agent.query("get_reconciliation", kind="ap")["reconciled"]
     assert agent.query("get_reconciliation", kind="inventory")["reconciled"]
     cancel = agent.commit("cancel_purchase_order", po=number, reason="x")
-    assert cancel["error"]["code"] == "PRECONDITION_FAILED"
-    assert grn2["document"]["number"] in cancel["error"]["details"]["blocking_documents"]
+    assert (
+        cancel["error"]["code"] == "PRECONDITION_FAILED"
+        and grn2["document"]["number"] in cancel["error"]["details"]["blocking_documents"]
+    )

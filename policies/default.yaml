@@ -28,6 +28,8 @@ groups:
   approval_tools:
     - approve_purchase_order
     - reject_approval
+    - accept_goods
+    - reject_goods
 
 rules:
   - id: period_lock
@@ -51,6 +53,13 @@ rules:
     effect: deny
     condition: "actor.id == po.created_by"
     message: "approver {actor.id} created the purchase order"
+
+  - id: goods_acceptance_by_human
+    description: Agents may simulate a goods receipt; posting one needs a human count. An agent commit parks a goods_acceptance request.
+    applies_to: [receive_goods]
+    effect: requires_approval
+    condition: "actor.kind == 'agent'"
+    message: "goods are posted by a human after counting: the receipt is parked for acceptance (accept_goods / reject_goods)"
 
   - id: human_approval_only
     description: Approval decisions require a human (or admin) token in the POC.
