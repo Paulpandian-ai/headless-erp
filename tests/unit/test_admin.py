@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from anerp.admin.tokens import bootstrap_admin, resolve_token
+from anerp.config import get_settings
 from anerp.core.dispatch import dispatch, run_query
 from anerp.core.envelope import Envelope, Principal
 from tests.conftest import ADMIN, AGENT, Client
@@ -11,7 +12,9 @@ def test_bootstrap_and_mint_and_revoke(kernel, admin: Client) -> None:
     kernel.commit()
     assert row is not None and row.subject == "admin:bootstrap"
     assert bootstrap_admin(kernel) is None
-    principal = resolve_token(kernel, "anerp_test_bootstrap_admin_token")
+    clear = get_settings().bootstrap_admin_token  # whatever the environment set (CI differs)
+    assert clear
+    principal = resolve_token(kernel, clear)
     assert principal and principal.kind == "admin" and principal.has_scope("anything:write")
     assert resolve_token(kernel, "wrong") is None
 
