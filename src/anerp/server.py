@@ -1,4 +1,5 @@
-"""FastAPI application: /mcp (MCP over streamable HTTP), /a2a, /events/stream, /healthz, well-known."""
+"""FastAPI application: /mcp (MCP over streamable HTTP), /api (HTTP facade), /a2a,
+/events/stream, /healthz, well-known."""
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlmodel import select
 from sse_starlette.sse import EventSourceResponse
@@ -21,6 +23,7 @@ from anerp.config import get_settings
 from anerp.core.ids import iso, new_ulid
 from anerp.db import init_db, session_scope
 from anerp.events.log import poll
+from anerp.facade import router as facade_router
 from anerp.ledger.models import PolicyVersion, ServerKey
 from anerp.ledger.receipts import keyring
 from anerp.mcp_server.app import build_http_app
@@ -67,6 +70,21 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers["x-request-id"] = request_id
         return response
+
+    # Added last so it wraps everything, including the /mcp route and preflight requests.
+    # allow_credentials stays False: every surface authenticates with a bearer header, never a
+    # cookie, and "*" plus credentials is rejected by browsers anyway.
+    if origins := settings.cors_origin_list:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "Mcp-Session-Id", "X-Request-Id"],
+            expose_headers=["X-Request-Id"],
+        )
+
+    app.include_router(facade_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:

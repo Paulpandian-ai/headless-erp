@@ -34,8 +34,26 @@ class BaseTool:
     kind: ClassVar[str] = "write"  # write | query | admin
 
     @classmethod
+    def parameter_names(cls) -> list[str]:
+        """Payload field names in schema order (envelope fields are not payload)."""
+        return list(cls.payload_model.model_fields)
+
+    @classmethod
+    def required_parameter_names(cls) -> list[str]:
+        return [n for n, f in cls.payload_model.model_fields.items() if f.is_required()]
+
+    @classmethod
+    def signature(cls) -> str:
+        """`tool_name(required, optional?)` - the first line of every description."""
+        params = ", ".join(
+            name if info.is_required() else f"{name}?"
+            for name, info in cls.payload_model.model_fields.items()
+        )
+        return f"{cls.name}({params})"
+
+    @classmethod
     def description(cls) -> str:
-        return cls.purpose
+        return f"{cls.signature()}: {cls.purpose}"
 
     @classmethod
     def input_schema(cls) -> dict[str, Any]:
@@ -75,7 +93,7 @@ class WriteTool(BaseTool):
             "; ".join(cls.common_errors) if cls.common_errors else "VALIDATION_ERROR, NOT_FOUND"
         )
         return (
-            f"{cls.name}: {cls.purpose}\n"
+            f"{cls.signature()}: {cls.purpose}\n"
             f"Preconditions: {pre}.\n"
             f"Effects on commit: {cls.effects}\n"
             'Simulate first: call with mode="simulate" to see projected effects and policy decision '
@@ -146,6 +164,7 @@ class Registry:
             groups.setdefault(tool.module, []).append(
                 {
                     "name": tool.name,
+                    "signature": tool.signature(),
                     "kind": tool.kind,
                     "scope": tool.scope,
                     "summary": tool.purpose,

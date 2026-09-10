@@ -13,6 +13,8 @@ def _settings(monkeypatch, **env: str) -> Settings:
         "PORT",
         "ANERP_PUBLIC_URL",
         "RAILWAY_PUBLIC_DOMAIN",
+        "ANERP_CORS_ORIGINS",
+        "ANERP_ENV",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
@@ -63,3 +65,23 @@ def test_generated_signing_key_survives_restart(kernel, agent) -> None:
     second = agent.ok("create_supplier", code="K-RESTART-2", name="k")
     assert second["receipt"]["public_key_id"] == first["receipt"]["public_key_id"]
     assert agent.query("verify_receipt", receipt_id=first["receipt"]["id"])["valid"]
+
+
+def test_cors_origins_default_to_star_in_dev_only(monkeypatch) -> None:
+    # Unset: a console can be pointed at a dev server with no extra configuration...
+    assert _settings(monkeypatch, ANERP_ENV="dev").cors_origin_list == ["*"]
+    assert _settings(monkeypatch, ANERP_ENV="test").cors_origin_list == ["*"]
+    # ...but demo and prod send no CORS headers until an origin is named.
+    assert _settings(monkeypatch, ANERP_ENV="demo").cors_origin_list == []
+    assert _settings(monkeypatch, ANERP_ENV="prod").cors_origin_list == []
+
+
+def test_cors_origins_are_parsed_as_a_comma_separated_list(monkeypatch) -> None:
+    s = _settings(
+        monkeypatch,
+        ANERP_ENV="prod",
+        ANERP_CORS_ORIGINS="https://console.example, https://ops.example ,",
+    )
+    assert s.cors_origin_list == ["https://console.example", "https://ops.example"]
+    # An explicit empty value switches CORS off even in dev.
+    assert _settings(monkeypatch, ANERP_ENV="dev", ANERP_CORS_ORIGINS="").cors_origin_list == []
