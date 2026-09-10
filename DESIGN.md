@@ -300,13 +300,15 @@ Simulate: returns uniqueness check result and the projected record. Commit: pers
 | Tool | Returns |
 |---|---|
 | `get_document(type, id_or_number)` | full document with lines, status, linked docs, receipts |
-| `search_documents(type, filters, limit)` | paged list; filters by status, party, date range, number prefix |
+| `search_documents(type, filters, limit)` | paged list; filters by status, party, date range, number prefix; descending by `created_at`, or by `start_date` for `FiscalPeriod` (seeded periods share one `created_at`, so the calendar needs the field that actually orders it) |
+| `list_document_types(type?)` | the legal `type` values for `search_documents`/`get_document`, each with number prefix, supported filters and sort order — discoverable without provoking a `VALIDATION_ERROR` |
 | `list_open_items(kind, party_id?, overdue_only?)` | AP/AR open items with remaining amounts and due dates |
 | `get_account_balance(account_code, as_of_date?)` | debit/credit totals and net |
 | `get_trial_balance(period_code)` | all accounts, totals, `is_balanced` |
 | `get_ledger_entries(account_code, period_code)` | journal lines for an account |
 | `get_inventory(sku?)` | on-hand quantities |
 | `get_period(period_code)` | status and close-readiness checklist |
+| `get_current_period()` | the period bracketing today with its status and checklist, plus the nearest open period when today's is closed — how a client finds "now" |
 | `poll_events(after_seq, types?, limit)` | events with seq > after_seq |
 | `verify_receipt(receipt_id)` | recomputes hashes, verifies signature, returns `valid: bool` |
 | `describe_tool(name)` | the long-form description, examples, and compensating tool for one tool (helps agents plan) |

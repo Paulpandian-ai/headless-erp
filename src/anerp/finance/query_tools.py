@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import select
 
 from anerp.core.context import ToolContext
-from anerp.core.errors import not_found, validation
+from anerp.core.errors import AnerpError, ErrorCode, not_found, validation
 from anerp.core.registry import QueryTool, registry, tool
 from anerp.documents import find_document, serialize, summary
 from anerp.events.log import poll
@@ -18,11 +18,34 @@ from anerp.finance.periods import close_readiness
 from anerp.ledger.receipts import verify_receipt
 from anerp.ledger.trial_balance import account_balance, trial_balance
 from anerp.masterdata.models import Customer, Item, Supplier
-from anerp.models import DOCUMENT_TYPES
+from anerp.models import DOCUMENT_TYPES, NUMBER_PREFIXES
 
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class EmptyQuery(_Strict):
+    pass
+
+
+# `search_documents` sorts newest-first on `created_at`, which is meaningless for rows the seed
+# writes in one go: all 36 fiscal periods share a creation timestamp, so the calendar came back
+# oldest-code-first and a client could not find "now". Periods sort on the field that actually
+# orders them instead. `list_document_types` reports the choice per type.
+_ORDER_FIELD: dict[str, str] = {"FiscalPeriod": "start_date"}
+_DEFAULT_ORDER_FIELD = "created_at"
+
+_PARTY_ATTRS = ("supplier_id", "customer_id", "party_id")
+_IDENTIFIER_ATTRS = ("number", "code", "sku")
+
+
+def _order_field(type_name: str) -> str:
+    return _ORDER_FIELD.get(type_name, _DEFAULT_ORDER_FIELD)
+
+
+def _first_attr(model: type, candidates: tuple[str, ...]) -> str | None:
+    return next((a for a in candidates if hasattr(model, a)), None)
 
 
 class GetDocumentPayload(_Strict):
@@ -65,7 +88,7 @@ class SearchDocuments(QueryTool):
     name = "search_documents"
     module = "query"
     scope = "documents:read"
-    purpose = "List documents of one type filtered by status, party, creation date range or number prefix (paged, newest first)."
+    purpose = "List documents of one type filtered by status, party, creation date range or number prefix (paged, descending: by created_at, or by start_date for FiscalPeriod). Call list_document_types for the legal types and each type's ordering."
     payload_model = SearchPayload
 
     def run(self, ctx: ToolContext, payload: SearchPayload) -> dict[str, Any]:
@@ -77,10 +100,8 @@ class SearchDocuments(QueryTool):
             stmt = stmt.where(model.status == payload.status)  # type: ignore[attr-defined]
         if payload.party:
             party_id = _party_id(ctx, payload.party)
-            for attr in ("supplier_id", "customer_id", "party_id"):
-                if hasattr(model, attr):
-                    stmt = stmt.where(getattr(model, attr) == party_id)
-                    break
+            if (attr := _first_attr(model, _PARTY_ATTRS)) is not None:
+                stmt = stmt.where(getattr(model, attr) == party_id)
         if payload.number_prefix and hasattr(model, "number"):
             stmt = stmt.where(model.number.startswith(payload.number_prefix))  # type: ignore[attr-defined]
         if payload.date_from:
@@ -91,14 +112,66 @@ class SearchDocuments(QueryTool):
             stmt = stmt.where(
                 model.created_at <= datetime.combine(payload.date_to, datetime.max.time())
             )  # type: ignore[attr-defined]
-        stmt = stmt.order_by(model.created_at.desc()).offset(payload.offset).limit(payload.limit)  # type: ignore[attr-defined]
+        order_field = _order_field(payload.type)
+        stmt = (
+            stmt.order_by(getattr(model, order_field).desc())
+            .offset(payload.offset)
+            .limit(payload.limit)
+        )
         rows = ctx.session.exec(stmt).all()
         return {
             "type": payload.type,
             "count": len(rows),
             "offset": payload.offset,
+            "order_by": f"{order_field} desc",
             "items": [summary(payload.type, r) for r in rows],
         }
+
+
+class ListDocumentTypesPayload(_Strict):
+    type: str | None = Field(
+        default=None, description="One type to describe; omit for the whole list"
+    )
+
+
+@tool
+class ListDocumentTypes(QueryTool):
+    name = "list_document_types"
+    module = "query"
+    scope = "documents:read"
+    purpose = "The legal values for the `type` parameter of search_documents and get_document, each with its number prefix, the filters it supports and its sort order - so a client never has to learn them by triggering a VALIDATION_ERROR."
+    payload_model = ListDocumentTypesPayload
+
+    def run(self, ctx: ToolContext, payload: ListDocumentTypesPayload) -> dict[str, Any]:
+        if payload.type is not None and payload.type not in DOCUMENT_TYPES:
+            raise validation(f"unknown document type {payload.type}", known=sorted(DOCUMENT_TYPES))
+        wanted = [payload.type] if payload.type else sorted(DOCUMENT_TYPES)
+        types = [_document_type_facts(name, DOCUMENT_TYPES[name]) for name in wanted]
+        return {"count": len(types), "types": types}
+
+
+def _document_type_facts(type_name: str, model: type) -> dict[str, Any]:
+    """Everything search_documents will actually do with this type, read off the model."""
+    party_field = _first_attr(model, _PARTY_ATTRS)
+    filters = []
+    if hasattr(model, "status"):
+        filters.append("status")
+    if party_field is not None:
+        filters.append("party")
+    filters += ["date_from", "date_to"]
+    if hasattr(model, "number"):
+        filters.append("number_prefix")
+    return {
+        "type": type_name,
+        "number_prefix": NUMBER_PREFIXES.get(type_name),
+        "identifier_field": _first_attr(model, _IDENTIFIER_ATTRS),
+        "party_field": party_field,
+        "filters": filters,
+        # `date_from`/`date_to` always bracket `created_at`, which is not always the field the
+        # rows are ordered by -- seeded fiscal periods, for instance, share one created_at.
+        "date_field": "created_at",
+        "order_by": f"{_order_field(type_name)} desc",
+    }
 
 
 def _party_id(ctx: ToolContext, ref: str) -> str:
@@ -299,6 +372,50 @@ class GetPeriod(QueryTool):
         }
 
 
+@tool
+class GetCurrentPeriod(QueryTool):
+    name = "get_current_period"
+    module = "query"
+    scope = "finance:read"
+    purpose = "The fiscal period that brackets today's date, with its status and close-readiness checklist - this is how you find 'now' without paging the whole calendar. When today's period is already closed, `nearest_open_period` names the closest open one to post into."
+    payload_model = EmptyQuery
+
+    def run(self, ctx: ToolContext, payload: EmptyQuery) -> dict[str, Any]:
+        today = ctx.now.date()
+        period = ctx.session.exec(
+            select(FiscalPeriod).where(
+                FiscalPeriod.start_date <= today, FiscalPeriod.end_date >= today
+            )
+        ).first()
+        if period is None:
+            raise AnerpError(
+                ErrorCode.NOT_FOUND,
+                f"No fiscal period covers {today.isoformat()}",
+                {"as_of": today.isoformat()},
+            )
+        is_open = period.status == "open"
+        return {
+            "as_of": today.isoformat(),
+            "period": period.model_dump(mode="json"),
+            "is_open": is_open,
+            "close_readiness": close_readiness(ctx.session, period),
+            "nearest_open_period": None if is_open else _nearest_open_period(ctx, today),
+        }
+
+
+def _nearest_open_period(ctx: ToolContext, as_of: date) -> dict[str, Any] | None:
+    """The open period whose bounds sit closest to `as_of`, for a caller that needs a posting date
+    once today's period turns out to be closed."""
+    rows = ctx.session.exec(select(FiscalPeriod).where(FiscalPeriod.status == "open")).all()
+    if not rows:
+        return None
+    nearest = min(
+        rows,
+        key=lambda p: min(abs((p.start_date - as_of).days), abs((p.end_date - as_of).days)),
+    )
+    return nearest.model_dump(mode="json")
+
+
 class PollEventsPayload(_Strict):
     after_seq: int = Field(default=0, ge=0)
     types: list[str] | None = None
@@ -373,10 +490,6 @@ class DescribeTool(QueryTool):
                 "payload": "<fields per input_schema>",
             },
         }
-
-
-class EmptyQuery(_Strict):
-    pass
 
 
 @tool
