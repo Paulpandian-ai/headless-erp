@@ -232,7 +232,11 @@ def dispatch(
         err = AnerpError(
             ErrorCode.VALIDATION_ERROR,
             f"invalid payload for {tool.name}",
-            {"errors": _jsonable(exc.errors(include_url=False))},
+            {
+                "errors": _jsonable(exc.errors(include_url=False)),
+                "expected_fields": tool.parameter_names(),
+                "required_fields": tool.required_parameter_names(),
+            },
         )
         _log(
             {
@@ -346,7 +350,11 @@ def run_query(
         err = AnerpError(
             ErrorCode.VALIDATION_ERROR,
             f"invalid payload for {name}",
-            {"errors": _jsonable(exc.errors(include_url=False))},
+            {
+                "errors": _jsonable(exc.errors(include_url=False)),
+                "expected_fields": tool.parameter_names(),
+                "required_fields": tool.required_parameter_names(),
+            },
         )
         _log(
             {

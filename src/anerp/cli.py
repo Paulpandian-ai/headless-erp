@@ -52,7 +52,8 @@ def _query(name: str, **payload: Any) -> Any:
 
 @app.command()
 def serve(host: str = "0.0.0.0", port: int | None = None, reload: bool = False) -> None:
-    """Run the HTTP server in the foreground (MCP at /mcp, A2A at /a2a, SSE at /events/stream).
+    """Run the HTTP server in the foreground (MCP at /mcp, HTTP facade at /api, A2A at /a2a,
+    SSE at /events/stream).
 
     Blocks until the server stops. Exits non-zero when startup fails (bad config, port in use).
     """

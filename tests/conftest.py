@@ -10,7 +10,10 @@ from typing import Any
 import pytest
 from sqlmodel import Session
 
-os.environ.setdefault("ANERP_ENV", "test")
+# Forced, not setdefault: a devcontainer or Codespace that exports ANERP_ENV=dev would otherwise
+# make the dispatcher demand a Principal on every in-process call and fail the whole suite.
+# ANERP_DATABASE_URL stays overridable for the CI integration runs (see CLAUDE.md).
+os.environ["ANERP_ENV"] = "test"
 os.environ.setdefault("ANERP_DATABASE_URL", "sqlite://")
 os.environ.setdefault("ANERP_TOKEN_PEPPER", "test-pepper-not-secret")
 os.environ.setdefault("ANERP_BOOTSTRAP_ADMIN_TOKEN", "anerp_test_bootstrap_admin_token")

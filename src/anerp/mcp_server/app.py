@@ -22,8 +22,10 @@ INSTRUCTIONS = (
     "anerp is a headless ERP kernel. Tools are business operations (not CRUD). Every write tool accepts "
     "mode='simulate' (no side effects, returns projected effects + policy decision) and mode='commit' "
     "(requires a unique idempotency_key; returns a signed receipt). Simulate before you commit. Errors "
-    "come back with a stable code and retry_advice. Read the prompts (procure_to_pay_playbook, "
-    "order_to_cash_playbook, period_close_checklist) and the anerp://capabilities resource to plan."
+    "come back with a stable code and retry_advice. The first line of every tool description is its "
+    "signature, tool_name(required, optional?), with ? marking optional parameters. Read the prompts "
+    "(procure_to_pay_playbook, order_to_cash_playbook, period_close_checklist) and the "
+    "anerp://capabilities resource to plan."
 )
 
 

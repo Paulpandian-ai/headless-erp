@@ -43,6 +43,7 @@ class Settings(BaseSettings):
         default="http://localhost:8000",
         validation_alias=AliasChoices("ANERP_PUBLIC_URL", "RAILWAY_PUBLIC_DOMAIN"),
     )
+    cors_origins: str | None = None
     log_level: str = "INFO"
     otel_enabled: bool = False
     simulation_ttl_minutes: int = 10
@@ -67,6 +68,19 @@ class Settings(BaseSettings):
         if value and not value.startswith(("http://", "https://")):
             return "https://" + value
         return value
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Browser origins allowed on /api and /mcp (ANERP_CORS_ORIGINS, comma separated).
+
+        Unset means "*" in dev and test so a console can be pointed at a dev server without
+        extra configuration, and no CORS headers at all in demo/prod, where the origin has to
+        be named explicitly. "*" is safe here only because the facade authenticates with a
+        bearer header and never with cookies (allow_credentials stays off).
+        """
+        if self.cors_origins is None:
+            return ["*"] if self.env in ("dev", "test") else []
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def redact_field_set(self) -> frozenset[str]:

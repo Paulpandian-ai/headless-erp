@@ -25,11 +25,11 @@ higher agent task success and safety than a UI-era ERP with an MCP wrapper.* The
 
 ```bash
 uv sync                                   # Python 3.12, all deps
-uv run pytest -q                          # 39 tests, SQLite in memory, no network
+uv run pytest -q                          # 67 tests, SQLite in memory, no network
 cp .env.example .env                      # local-to-the-codespace run only; never commit .env
 uv run anerp seed                         # chart of accounts, periods, 2 suppliers, 2 customers, 4 items
 uv run anerp token mint human:you --kind admin --scopes 'admin:*'   # prints the clear token once
-uv run anerp serve                        # foreground; MCP at /mcp, A2A at /a2a, SSE at /events/stream (`anerp start` = migrate + serve)
+uv run anerp serve                        # foreground; MCP at /mcp, HTTP facade at /api, A2A at /a2a, SSE at /events/stream (`anerp start` = migrate + serve)
 ```
 
 Connect Claude Code to a running server (cloud or Codespace, forwarded port):
@@ -73,6 +73,42 @@ MCP extras: resources `anerp://chart-of-accounts`, `anerp://policies`, `anerp://
 `anerp://events/latest`; prompts `procure_to_pay_playbook`, `order_to_cash_playbook`,
 `period_close_checklist`.
 
+## HTTP facade
+
+For callers that speak plain HTTP rather than MCP (a browser console, `curl`, a scripted client),
+the same tool surface is exposed at three routes:
+
+```
+POST /api/query/{tool}      -> core.run_query
+POST /api/simulate/{tool}   -> core.dispatch, mode=simulate
+POST /api/commit/{tool}     -> core.dispatch, mode=commit
+```
+
+The body is the tool payload; on simulate and commit the envelope fields `idempotency_key`,
+`simulation_id` and `on_behalf_of` sit alongside it, exactly as in MCP `tools/call` arguments. Same
+bearer tokens, same scopes, same response JSON -- the facade holds no business logic of its own, so
+anything true of the MCP surface is true here.
+
+```bash
+curl -sX POST "$ANERP_URL/api/query/get_trial_balance" \
+  -H "Authorization: Bearer $ANERP_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"period_code":"2026-09"}'
+
+curl -sX POST "$ANERP_URL/api/simulate/create_purchase_order" \
+  -H "Authorization: Bearer $ANERP_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"supplier":"ACME","lines":[{"sku":"WIDGET-1","qty":10,"unit_cost":"50.00"}]}'
+```
+
+HTTP status is 200 for anything the kernel answered, including business errors -- read `ok` and
+`error.code` from the body, as an MCP client would. Only a request that fails to authenticate gets
+a 401. Every tool's parameter names are the first line of its description
+(`create_purchase_order(supplier, lines, memo?)`, `?` marking optional), and a `VALIDATION_ERROR`
+repeats them under `error.details.expected_fields` / `required_fields`.
+
+The routes are in the OpenAPI schema at `GET /openapi.json`. Browser origins come from
+`ANERP_CORS_ORIGINS` (comma separated); unset means `*` in dev and test and no CORS headers at all
+in demo and prod, where the origin has to be named.
+
 ## Protocol and vendor matrix
 
 | Client | Transport | How it connects | Status |
@@ -83,6 +119,7 @@ MCP extras: resources `anerp://chart-of-accounts`, `anerp://policies`, `anerp://
 | OpenAI Agents SDK | MCP streamable HTTP | `anerp.eval.clients.openai_agents_sdk` | adapter written, needs `openai-agents` + `OPENAI_API_KEY`; not run in CI |
 | Google ADK | MCP streamable HTTP | `anerp.eval.clients.google_adk` | adapter written, needs `google-adk` + `GOOGLE_API_KEY`; not run in CI |
 | Any A2A client | A2A JSON-RPC (v1.0) | `GET /.well-known/agent-card.json`, `POST /a2a` | covered by `tests/e2e/test_a2a.py` |
+| Browser console / `curl` / any HTTP client | HTTP facade | `POST /api/{query,simulate,commit}/{tool}` | covered by `tests/e2e/test_http_facade.py` |
 | AWS Bedrock AgentCore | MCP streamable HTTP (Gateway) | **not executed** — see below | described only |
 
 **AWS AgentCore (description from public documentation only; nothing is run or hosted on AWS).**

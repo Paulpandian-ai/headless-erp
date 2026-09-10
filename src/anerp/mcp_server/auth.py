@@ -43,12 +43,36 @@ def principal_from_env() -> Principal | None:
     return principal_from_token(token)
 
 
-def _www_authenticate() -> list[tuple[bytes, bytes]]:
+def www_authenticate() -> str:
+    """The WWW-Authenticate value for a request that carried no token (RFC 9728 when enabled)."""
     settings = get_settings()
     if settings.advertise_oauth:
         url = settings.public_url.rstrip("/") + "/.well-known/oauth-protected-resource"
-        return [(b"www-authenticate", f'Bearer resource_metadata="{url}"'.encode())]
-    return [(b"www-authenticate", b"Bearer")]
+        return f'Bearer resource_metadata="{url}"'
+    return "Bearer"
+
+
+def unauthorized_body() -> dict[str, Any]:
+    """The 401 body shared by every HTTP surface (MCP transport and the /api facade)."""
+    return {
+        "ok": False,
+        "error": {
+            "code": "UNAUTHORIZED",
+            "message": "missing or invalid bearer token",
+            "retry_advice": "Obtain a valid bearer token (Authorization: Bearer <token>).",
+        },
+    }
+
+
+def bearer_token(authorization: str | None) -> str | None:
+    """Extract the token from an Authorization header value, or None when absent/not bearer."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    return authorization[7:].strip() or None
+
+
+def _www_authenticate() -> list[tuple[bytes, bytes]]:
+    return [(b"www-authenticate", www_authenticate().encode())]
 
 
 class BearerAuthMiddleware:
@@ -62,20 +86,10 @@ class BearerAuthMiddleware:
             await self.app(scope, receive, send)
             return
         headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-        auth = headers.get("authorization", "")
-        token = auth[7:].strip() if auth.lower().startswith("bearer ") else None
+        token = bearer_token(headers.get("authorization"))
         principal = principal_from_token(token)
         if principal is None:
-            body = json.dumps(
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "missing or invalid bearer token",
-                        "retry_advice": "Obtain a valid bearer token (Authorization: Bearer <token>).",
-                    },
-                }
-            ).encode()
+            body = json.dumps(unauthorized_body()).encode()
             extra = _www_authenticate() if token is None else []
             await send(
                 {

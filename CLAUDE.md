@@ -34,7 +34,8 @@
 | MCP server (HTTP + stdio), auth, resources, prompts | `src/anerp/mcp_server/` |
 | A2A agent (card, executor, skills, LLM loop) | `src/anerp/a2a_agent/` |
 | Eval harness (control server, tasks, clients, metrics, report) | `src/anerp/eval/` |
-| HTTP app (`/mcp`, `/a2a`, `/events/stream`, `/healthz`, well-known) | `src/anerp/server.py` |
+| HTTP app (`/mcp`, `/api`, `/a2a`, `/events/stream`, `/healthz`, well-known) | `src/anerp/server.py` |
+| HTTP facade (`POST /api/{query,simulate,commit}/{tool}`) | `src/anerp/facade.py` |
 | CLI | `src/anerp/cli.py` |
 
 ## Conventions that are easy to miss
