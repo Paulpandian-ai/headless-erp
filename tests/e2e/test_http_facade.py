@@ -102,7 +102,7 @@ async def test_simulate_then_commit_then_replay(app):
     token = app.state.agent_token
     payload = {
         "supplier": "ACME",
-        "lines": [{"sku": "WIDGET-1", "qty": 5, "unit_cost": "10.00"}],
+        "lines": [{"sku": "HOSE-10M", "qty": 5, "unit_cost": "25.00"}],
     }
 
     async def po_count(http) -> int:
@@ -137,7 +137,7 @@ async def test_simulate_then_commit_then_replay(app):
         conflict = (
             await http.post(
                 "/api/commit/create_purchase_order",
-                json={**body, "lines": [{"sku": "WIDGET-1", "qty": 9, "unit_cost": "10.00"}]},
+                json={**body, "lines": [{"sku": "HOSE-10M", "qty": 9, "unit_cost": "25.00"}]},
             )
         ).json()
         assert conflict["error"]["code"] == "IDEMPOTENCY_CONFLICT"
