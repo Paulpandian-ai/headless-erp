@@ -300,7 +300,7 @@ Simulate: returns uniqueness check result and the projected record. Commit: pers
 | Tool | Returns |
 |---|---|
 | `get_document(type, id_or_number)` | full document with lines, status, linked docs, receipts |
-| `search_documents(type, filters, limit)` | paged list; filters by status, party, date range, number prefix; descending by `created_at`, or by `start_date` for `FiscalPeriod` (seeded periods share one `created_at`, so the calendar needs the field that actually orders it) |
+| `search_documents(type, filters, limit)` | paged list; filters by status, party, date range, number prefix; descending by `created_at`, or by `start_date` for `FiscalPeriod` (seeded periods share one `created_at`, so the calendar needs the field that actually orders it). Note the asymmetry: `date_from`/`date_to` bracket `created_at` for every type, `FiscalPeriod` included, even though periods sort on `start_date` — filter periods by `code` or read the whole calendar; `list_document_types` reports both `date_field` and `order_by` per type |
 | `list_document_types(type?)` | the legal `type` values for `search_documents`/`get_document`, each with number prefix, supported filters and sort order — discoverable without provoking a `VALIDATION_ERROR` |
 | `list_open_items(kind, party_id?, overdue_only?)` | AP/AR open items with remaining amounts and due dates |
 | `get_account_balance(account_code, as_of_date?)` | debit/credit totals and net |
@@ -313,6 +313,7 @@ Simulate: returns uniqueness check result and the projected record. Commit: pers
 | `verify_receipt(receipt_id)` | recomputes hashes, verifies signature, returns `valid: bool` |
 | `describe_tool(name)` | the long-form description, examples, and compensating tool for one tool (helps agents plan) |
 | `list_capabilities()` | catalog grouped by module with scopes and a one-line summary each |
+| `whoami()` | the calling token's subject, kind, scopes, expiry and the names of every tool it may call — the one tool with no scope requirement, so any authenticated token can learn what it is allowed to do before asking for anything else |
 
 ### 7.6 Tool description template (use verbatim structure for every write tool)
 
@@ -424,7 +425,7 @@ Default rules (POC):
 
 - Append-only `Event` table with global `seq`. Written in the same transaction as the effects.
 - Event types: `<document>.<verb>` as listed per tool in §7. Payload = `{document_type, document_id, number, status, receipt_id, summary}` (summary is a short human/LLM-readable sentence).
-- Delivery: `GET /events/stream?after_seq=N&types=a,b` (SSE, `text/event-stream`) and MCP tool `poll_events`. Also expose MCP resource `anerp://events/latest` (last 50).
+- Delivery: `GET /events/stream?after_seq=N&types=a,b` (SSE, `text/event-stream`) and MCP tool `poll_events`. Also expose MCP resource `anerp://events/latest` (last 50). The stream needs `events:read`: no or invalid token → 401 `UNAUTHORIZED`, valid token without the scope → 403 `FORBIDDEN`, both with the standard error body and a logged `request_id` (§11).
 - Never emit in simulate mode.
 
 ## 11. MCP server (`anerp.mcp_server`)

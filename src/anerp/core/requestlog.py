@@ -141,12 +141,21 @@ request_log = RequestLog()
 simulations = SimulationStore()
 
 
-def log_auth_failure(*, tool: str, mode: str, message: str, actor_id: str = "anonymous") -> str:
+def log_auth_failure(
+    *,
+    tool: str,
+    mode: str,
+    message: str,
+    actor_id: str = "anonymous",
+    actor_kind: str = "unknown",
+    error_code: ErrorCode = ErrorCode.UNAUTHORIZED,
+) -> str:
     """Record a rejected-at-the-door request and return its request_id.
 
     The dispatcher logs every business error, which is what makes `explain_error(request_id)`
-    work. A 401 never reaches the dispatcher -- the transport answers first -- so it is logged
-    here instead, and the id goes into the 401 body like the id in any other error response.
+    work. A 401 or a transport-level 403 never reaches the dispatcher -- the transport answers
+    first -- so it is logged here instead, and the id goes into the body like the id in any
+    other error response. A 403 names the principal that was refused; a 401 has none.
     """
     request_id = new_ulid()
     request_log.add(
@@ -155,11 +164,11 @@ def log_auth_failure(*, tool: str, mode: str, message: str, actor_id: str = "ano
             tool=tool,
             mode=mode,
             actor_id=actor_id,
-            actor_kind="unknown",
+            actor_kind=actor_kind,
             outcome="error",
             started_at=utcnow(),
             latency_ms=0.0,
-            error_code=ErrorCode.UNAUTHORIZED.value,
+            error_code=error_code.value,
             error_message=message,
         )
     )

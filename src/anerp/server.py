@@ -27,7 +27,12 @@ from anerp.facade import router as facade_router
 from anerp.ledger.models import PolicyVersion, ServerKey
 from anerp.ledger.receipts import keyring
 from anerp.mcp_server.app import build_http_app
-from anerp.mcp_server.auth import principal_from_token, unauthorized_body
+from anerp.mcp_server.auth import (
+    bearer_token,
+    forbidden_body,
+    principal_from_token,
+    unauthorized_body,
+)
 from anerp.policy.engine import get_engine
 
 log = logging.getLogger("anerp.server")
@@ -144,11 +149,8 @@ def create_app() -> FastAPI:
         types: str | None = None,
         max_events: int | None = None,
     ) -> Any:
-        auth = request.headers.get("authorization", "")
-        principal = (
-            principal_from_token(auth[7:].strip()) if auth.lower().startswith("bearer ") else None
-        )
-        if principal is None or not principal.has_scope("events:read"):
+        principal = principal_from_token(bearer_token(request.headers.get("authorization")))
+        if principal is None:
             return JSONResponse(
                 unauthorized_body(
                     tool="events_stream",
@@ -156,6 +158,19 @@ def create_app() -> FastAPI:
                     message="the events stream needs a bearer token carrying events:read",
                 ),
                 status_code=401,
+            )
+        # A valid token without the scope is a 403, not a 401 (DESIGN.md §11), the same
+        # answer `poll_events` gives through the dispatcher.
+        if not principal.has_scope("events:read"):
+            return JSONResponse(
+                forbidden_body(
+                    principal=principal,
+                    tool="events_stream",
+                    mode="stream",
+                    required_scope="events:read",
+                    message="token lacks scope 'events:read' required by the events stream",
+                ),
+                status_code=403,
             )
         wanted = [t for t in (types or "").split(",") if t] or None
 

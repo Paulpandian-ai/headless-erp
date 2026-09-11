@@ -96,6 +96,23 @@ async def test_a_401_is_shaped_like_every_other_error_and_is_explainable(app):
 
 
 @pytest.mark.anyio
+async def test_whoami_answers_for_any_authenticated_token(app, kernel):
+    """A token with no read scope at all cannot call list_capabilities, but it can always ask
+    what it is and what it may call."""
+    narrow = _mint(kernel, "agent:narrow", ["procurement:write"], "facade-narrow-1")
+    async with app.router.lifespan_context(app), _client(app, narrow) as http:
+        refused = (await http.post("/api/query/list_capabilities", json={})).json()
+        assert refused["error"]["code"] == "FORBIDDEN"
+        me = (await http.post("/api/query/whoami", json={})).json()
+    assert me["ok"], me
+    result = me["result"]
+    assert result["subject"] == "agent:narrow" and result["kind"] == "agent"
+    assert result["scopes"] == ["procurement:write"] and result["expires_at"] is None
+    assert "create_purchase_order" in result["tools"] and "whoami" in result["tools"]
+    assert "list_capabilities" not in result["tools"]
+
+
+@pytest.mark.anyio
 async def test_every_401_carries_a_distinct_request_id(app):
     async with app.router.lifespan_context(app), _client(app, "nope") as http:
         ids = {

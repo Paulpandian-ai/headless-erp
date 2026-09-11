@@ -80,6 +80,36 @@ def unauthorized_body(
     }
 
 
+def forbidden_body(
+    *, principal: Principal, tool: str, mode: str, required_scope: str, message: str
+) -> dict[str, Any]:
+    """The 403 body for a transport-level scope check (DESIGN.md §11: scope missing -> FORBIDDEN).
+
+    Same envelope and details as the dispatcher's own FORBIDDEN, so a client cannot tell whether
+    the refusal came from the transport or from `core.dispatch`, and `explain_error` names the
+    principal that was turned away.
+    """
+    request_id = log_auth_failure(
+        tool=tool,
+        mode=mode,
+        message=message,
+        actor_id=principal.subject,
+        actor_kind=principal.kind,
+        error_code=ErrorCode.FORBIDDEN,
+    )
+    return {
+        "ok": False,
+        "mode": mode,
+        "request_id": request_id,
+        "error": {
+            "code": ErrorCode.FORBIDDEN.value,
+            "message": message,
+            "details": {"required_scope": required_scope, "granted": principal.scopes},
+            "retry_advice": RETRY_ADVICE[ErrorCode.FORBIDDEN],
+        },
+    }
+
+
 def bearer_token(authorization: str | None) -> str | None:
     """Extract the token from an Authorization header value, or None when absent/not bearer."""
     if not authorization or not authorization.lower().startswith("bearer "):
