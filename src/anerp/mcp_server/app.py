@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import anyio
@@ -44,9 +45,19 @@ def _principal(ctx: Any) -> Principal | None:
     return None
 
 
-def build_server(*, stdio_principal: Principal | None = None) -> Server[Any]:
+def build_server(
+    *,
+    stdio_principal: Principal | None = None,
+    tool_filter: Callable[[str], bool] | None = None,
+) -> Server[Any]:
+    """`stdio_principal` binds every call to one principal (stdio transport, or a loopback
+    server the eval harness runs in-process); `tool_filter` hides tools from the listing."""
+
     async def on_list_tools(ctx: Any, params: Any) -> types.ListToolsResult:
-        return types.ListToolsResult(tools=mcp_tools())
+        tools = mcp_tools()
+        if tool_filter is not None:
+            tools = [t for t in tools if tool_filter(t.name)]
+        return types.ListToolsResult(tools=tools)
 
     async def on_call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
         principal = stdio_principal or _principal(ctx)

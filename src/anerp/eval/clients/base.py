@@ -33,6 +33,7 @@ class RunTrace:
     output_tokens: int = 0
     steps: int = 0
     error: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)  # adapter-specific: cache tokens, cost, ...
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -42,11 +43,13 @@ class RunTrace:
             "output_tokens": self.output_tokens,
             "steps": self.steps,
             "error": self.error,
+            "extra": self.extra,
         }
 
 
 class EvalClient(Protocol):
     name: str
+    needs_remote: bool  # True when the adapter can only reach a tool surface over MCP/HTTP
 
     def available(self) -> bool: ...
 
