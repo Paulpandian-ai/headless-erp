@@ -3,9 +3,9 @@
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/node:1": {}
   },
-  "postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv sync --all-extras && uv venv .venv-adk --python 3.12 && uv pip install --python .venv-adk/bin/python google-adk \"mcp<2\" && sudo apt-get update && sudo apt-get install -y postgresql-client",
+  "postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv sync --all-extras && uv venv .venv-adk --python 3.12 && uv pip install --python .venv-adk/bin/python google-adk \"mcp<2\" && sudo apt-get update && sudo apt-get install -y postgresql-client && npm install -g @anthropic-ai/claude-code",
   "forwardPorts": [
     8000,
     5432
