@@ -271,3 +271,49 @@ async def test_events_stream(app):
             assert denied.status_code == 401
             assert denied.json()["error"]["code"] == "UNAUTHORIZED"
             assert denied.json()["request_id"]
+
+
+@pytest.mark.anyio
+async def test_events_stream_without_the_scope_is_403(app, kernel):
+    """A valid token that merely lacks events:read is FORBIDDEN, not UNAUTHORIZED (DESIGN.md
+    §11) -- the same answer poll_events gives -- and the refusal is explainable by request id."""
+    narrow = dispatch(
+        Envelope(
+            tool="mint_token",
+            mode="commit",
+            idempotency_key="mcp-narrow-token-1",
+            actor=ADMIN,
+            payload={
+                "subject": "agent:no-events",
+                "kind": "agent",
+                "scopes": ["procurement:write"],
+            },
+        )
+    )["secret"]["token"]
+    async with app.router.lifespan_context(app):
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="http://testserver") as http:
+            denied = await http.get(
+                "/events/stream",
+                params={"max_events": 1},
+                headers={"Authorization": f"Bearer {narrow}"},
+            )
+            assert denied.status_code == 403
+            body = denied.json()
+            assert body["ok"] is False and body["mode"] == "stream"
+            assert body["error"]["code"] == "FORBIDDEN"
+            assert body["error"]["details"] == {
+                "required_scope": "events:read",
+                "granted": ["procurement:write"],
+            }
+            assert body["error"]["retry_advice"]
+
+            explained = await http.post(
+                "/api/query/explain_error",
+                json={"request_id": body["request_id"]},
+                headers={"Authorization": f"Bearer {app.state.agent_token}"},
+            )
+    entry = explained.json()["result"]
+    assert entry["error_code"] == "FORBIDDEN" and entry["tool"] == "events_stream"
+    # Unlike a 401, a 403 knows who was refused.
+    assert entry["actor_id"] == "agent:no-events" and entry["actor_kind"] == "agent"
