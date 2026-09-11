@@ -184,20 +184,21 @@ between agent rounds (accepting at the expected quantities unless the task overr
 duplicate document rate, recovery success, cost (tokens, tool calls, wall clock), trial-balance
 integrity.
 
-Both arms run against **one local kernel in the harness process** (the Postgres from
-`docker-compose.yml`), each tool surface served on a loopback port for the SDK adapters, so
-treatment and control differ in nothing but the tool surface. Setup, running, models and the
-google-adk interpreter are documented in [`src/anerp/eval/README.md`](src/anerp/eval/README.md).
+Both arms run against **one local kernel in the harness process** on any Postgres named by
+`ANERP_EVAL_DATABASE_URL` (Docker Compose, the CI service container, or a hosted/installed
+instance - see the eval README), each tool surface served on a loopback port for the SDK
+adapters, so treatment and control differ in nothing but the tool surface. Setup, running,
+models and the google-adk interpreter are documented in
+[`src/anerp/eval/README.md`](src/anerp/eval/README.md).
 
 ```bash
-docker compose up -d --wait
-export ANERP_EVAL_DATABASE_URL=postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval
-uv run --all-extras anerp eval --clients scripted --servers treatment            # self-test, no LLM
+export ANERP_EVAL_DATABASE_URL=postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval  # e.g. docker compose up -d --wait
+uv run --all-extras anerp eval --clients scripted --servers treatment,control    # oracle on both arms, no LLM
 uv run --all-extras anerp eval --clients claude_agent_sdk,openai_agents_sdk,google_adk --runs 3
 ```
 
-Outputs: `results/<run_id>/raw.jsonl`, `summary.csv`, `report.md` (and `success.png` when
-matplotlib is installed). `eval.yml` runs the matrix from GitHub Actions against a Postgres
+Outputs: `results/<run_id>/raw.jsonl`, `summary.csv`, `latency.csv`, `report.md` (and
+`success.png` when matplotlib is installed). `eval.yml` runs the matrix from GitHub Actions against a Postgres
 service. The `scripted` client is a deterministic oracle used to validate the checkers; it is
 not part of the paper's matrix.
 

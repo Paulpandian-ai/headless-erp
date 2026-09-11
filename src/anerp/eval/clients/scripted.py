@@ -1,8 +1,11 @@
 """`scripted` client: a deterministic, non-LLM agent used to validate the harness itself.
 
-It follows the simulate-then-commit discipline over the treatment surface only, is state-driven
-(the harness may call it again after a human accepted goods), and stops with a hand-off message
-whenever a human is needed. It is NOT a substitute for the SDK clients in the paper's matrix.
+On the treatment surface it follows the simulate-then-commit discipline, is state-driven (the
+harness may call it again after a human accepted goods), and stops with a hand-off message
+whenever a human is needed. On the control surface it plays the best-case CRUD agent
+(`scripted_crud`): the same twenty tasks done with raw row writes and its own bookkeeping. It is
+NOT a substitute for the SDK clients in the paper's matrix; it validates the checkers and gives a
+model-free floor for tool-call counts and per-call latency on both arms.
 """
 
 from __future__ import annotations
@@ -26,6 +29,11 @@ class ScriptedClient:
         self, narrative: str, surface: ToolSurface, *, max_steps: int, task_id: str
     ) -> RunTrace:
         trace = RunTrace()
+        if surface.name == "control":
+            from anerp.eval.clients.scripted_crud import run_crud
+
+            run_crud(surface, task_id, narrative, trace)
+            return trace
         if surface.name != "treatment":
             trace.final_text = "scripted client only understands the agent-native surface"
             trace.error = "unsupported_surface"

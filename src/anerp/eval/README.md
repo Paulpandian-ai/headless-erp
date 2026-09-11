@@ -10,8 +10,8 @@ twenty tasks, three runs each.
 Both arms run **in the harness process against one database**, so they differ in nothing but
 the tool surface:
 
-- one kernel database (`ANERP_EVAL_DATABASE_URL`, the Postgres from `docker-compose.yml`;
-  SQLite in memory if unset), reset through the `reset_and_seed` tool before every run;
+- one kernel database (`ANERP_EVAL_DATABASE_URL`, any Postgres you can reach; SQLite in memory
+  if unset), reset through the `reset_and_seed` tool before every run;
 - each surface served on a loopback port (`surface.LoopbackMcp`) for the SDK adapters, which
   only speak MCP over streamable HTTP - no network, no deployment, no shared dev database;
 - the agents act as `agent:eval` with `surface.EVAL_AGENT_SCOPES` on both arms; admin tools
@@ -30,14 +30,35 @@ but it confounds latency, cost and error behaviour with the network.
 uv sync --all-extras                                   # anerp + the three SDK adapters
 uv venv .venv-adk --python 3.12 \
   && uv pip install --python .venv-adk/bin/python google-adk "mcp<2"   # see "google-adk" below
-docker compose up -d --wait                            # Postgres 17 on 127.0.0.1:5432
-export ANERP_EVAL_DATABASE_URL=postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval
+export ANERP_EVAL_DATABASE_URL=postgresql+psycopg://<user>:<password>@<host>:5432/<db>
 export ANTHROPIC_API_KEY=… OPENAI_API_KEY=… GOOGLE_API_KEY=…   # only the adapters you run
 ```
 
-The devcontainer does all of this except `docker compose up` (it has docker-in-docker and
-exports `ANERP_EVAL_DATABASE_URL`). The compose credentials are throwaway and bound to loopback;
-`.github/workflows/eval.yml` uses the same image and credentials as a service container.
+The devcontainer does the first two lines and exports `ANERP_EVAL_DATABASE_URL` pointing at
+`127.0.0.1:5432` with the throwaway credentials below; it does not start a database (the
+Codespaces base image cannot run docker-in-docker).
+
+### The database
+
+The harness is Postgres-agnostic: it needs one reachable Postgres, named by
+`ANERP_EVAL_DATABASE_URL` (`postgresql+psycopg://…`), and creates the schema itself on first
+connect. Both arms share it and it is wiped by `reset_and_seed` before every run, so never point
+it at a database that holds anything you care about. Three ways to get one:
+
+1. **Docker Compose** (reviewers with Docker): `docker compose up -d --wait` starts Postgres 17
+   on `127.0.0.1:5432` with the throwaway loopback-only credentials in `docker-compose.yml`:
+   `postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval`.
+2. **GitHub Actions**: `.github/workflows/eval.yml` runs the matrix against a `postgres:17`
+   service container with the same credentials; nothing to set up.
+3. **Any other Postgres**: a hosted instance (Railway, Neon, Supabase, RDS …), a package-manager
+   install (`apt install postgresql`, `brew install postgresql@17`), or an existing server. Create
+   an empty database and a role that owns it, and export its URL. This is how the Codespace
+   result in `results/` was produced (apt Postgres 17 on loopback). A hosted instance adds network
+   latency to every tool call, on both arms equally.
+
+With the variable unset the harness falls back to SQLite in memory, which is fine for the
+checker self-test but not for the paper's numbers (`reset_and_seed`, row locking and the request
+log behave differently).
 
 ## Running
 
@@ -50,7 +71,8 @@ uv run --all-extras anerp eval \
 
 Outputs land in `results/<run_id>/`: `raw.jsonl` (one row per run with metrics and the full
 tool-call trace), `summary.csv` and `report.md` (per server x client x task, the §14.4 metrics),
-and `success.png` when matplotlib is installed. `--tasks p2p_01_simple --runs 1` is a cheap
+`latency.csv` (per-tool-call latency median/p95 per server x client, overall and per tool), and
+`success.png` when matplotlib is installed. `--tasks p2p_01_simple --runs 1` is a cheap
 probe (about $1 per adapter) before the full matrix. Runs on one kernel are sequential; budget
 roughly 60-90 s per run.
 
@@ -59,6 +81,16 @@ Models are pinned per adapter and recorded with the run: `ANERP_ANTHROPIC_MODEL`
 (`gemini-3.1-pro-preview`; `gemini-2.5-pro` is retired for new users).
 
 If the database is down the harness stops before the first run with a message pointing here.
+
+### Model-free run on both arms
+
+`--clients scripted --servers treatment,control` runs the deterministic oracle on both surfaces:
+on treatment it follows simulate-then-commit; on control (`clients/scripted_crud.py`) it is the
+best-case CRUD agent, doing every journal entry, open item, stock and status update itself with
+`insert_row`/`update_row`. No model is called, so it gives a floor for tool calls per task and a
+per-call latency comparison of the two surfaces on the same kernel; `report.md` and
+`latency.csv` carry the median/p95 per arm and the per-task call counts. It is not an LLM result
+and does not go in the paper's matrix.
 
 ## google-adk
 

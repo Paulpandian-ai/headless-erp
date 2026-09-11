@@ -1,7 +1,9 @@
-# Local services for the evaluation harness (DESIGN.md §14). The ERP itself is not containerised
-# here (it deploys to Railway from main); this only brings up the kernel database both eval arms
-# share, so `docker compose up -d --wait && uv run --all-extras anerp eval ...` works on a clean
-# machine. Credentials are throwaway and loopback-only; the CI eval workflow uses the same ones.
+# Optional local services for the evaluation harness (DESIGN.md §14). The ERP itself is not
+# containerised here (it deploys to Railway from main); this only brings up a kernel database both
+# eval arms can share, so `docker compose up -d --wait && uv run --all-extras anerp eval ...` works
+# on a machine with Docker. The harness itself only needs ANERP_EVAL_DATABASE_URL to point at some
+# Postgres (src/anerp/eval/README.md lists the alternatives). Credentials are throwaway and
+# loopback-only; the CI eval workflow uses the same ones.
 services:
   db:
     image: postgres:17
