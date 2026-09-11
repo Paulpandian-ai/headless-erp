@@ -10,11 +10,13 @@ from sqlmodel import select
 
 from anerp.core.context import ToolContext
 from anerp.core.errors import AnerpError, ErrorCode, not_found, validation
+from anerp.core.ids import iso
 from anerp.core.registry import QueryTool, registry, tool
 from anerp.documents import find_document, serialize, summary
 from anerp.events.log import poll
 from anerp.finance.models import FiscalPeriod, JournalEntry, JournalLine, OpenItem
 from anerp.finance.periods import close_readiness
+from anerp.ledger.models import ApiToken
 from anerp.ledger.receipts import verify_receipt
 from anerp.ledger.trial_balance import account_balance, trial_balance
 from anerp.masterdata.models import Customer, Item, Supplier
@@ -77,8 +79,14 @@ class SearchPayload(_Strict):
     status: str | None = None
     party: str | None = Field(default=None, description="Supplier/customer code or id")
     number_prefix: str | None = None
-    date_from: date | None = None
-    date_to: date | None = None
+    date_from: date | None = Field(
+        default=None,
+        description="Inclusive lower bound on created_at (every type, FiscalPeriod included)",
+    )
+    date_to: date | None = Field(
+        default=None,
+        description="Inclusive upper bound on created_at (every type, FiscalPeriod included)",
+    )
     limit: int = Field(default=50, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
 
@@ -88,7 +96,7 @@ class SearchDocuments(QueryTool):
     name = "search_documents"
     module = "query"
     scope = "documents:read"
-    purpose = "List documents of one type filtered by status, party, creation date range or number prefix (paged, descending: by created_at, or by start_date for FiscalPeriod). Call list_document_types for the legal types and each type's ordering."
+    purpose = "List documents of one type filtered by status, party, creation date range or number prefix (paged, descending: by created_at, or by start_date for FiscalPeriod). date_from/date_to always bracket created_at, even for FiscalPeriod, which sorts on start_date. Call list_document_types for the legal types and each type's date_field and order_by."
     payload_model = SearchPayload
 
     def run(self, ctx: ToolContext, payload: SearchPayload) -> dict[str, Any]:
@@ -502,3 +510,35 @@ class ListCapabilities(QueryTool):
 
     def run(self, ctx: ToolContext, payload: EmptyQuery) -> dict[str, Any]:
         return registry.catalog()
+
+
+@tool
+class WhoAmI(QueryTool):
+    name = "whoami"
+    module = "query"
+    # Empty scope: any authenticated token may call it (scope_matches treats "" as satisfied).
+    # A client that can reach the server at all can always learn what its token allows.
+    scope = ""
+    purpose = "The calling token's subject, kind, scopes and expiry, plus the names of every tool it may call. Any authenticated token; use it before list_capabilities to plan within what the token allows."
+    payload_model = EmptyQuery
+
+    def run(self, ctx: ToolContext, payload: EmptyQuery) -> dict[str, Any]:
+        principal = ctx.principal
+        if principal is None:
+            raise AnerpError(
+                ErrorCode.UNAUTHORIZED, "whoami needs an authenticated caller; no principal", {}
+            )
+        # `resolve_token` already refused expired and revoked tokens, so the row is read only for
+        # the dates a Principal does not carry. In-process principals have no row.
+        row = ctx.session.get(ApiToken, principal.token_id) if principal.token_id else None
+        allowed = sorted(t.name for t in registry.all() if principal.has_scope(t.scope))
+        return {
+            "subject": principal.subject,
+            "kind": principal.kind,
+            "scopes": list(principal.scopes),
+            "on_behalf_of": principal.on_behalf_of,
+            "token_id": principal.token_id,
+            "expires_at": iso(row.expires_at) if row is not None else None,
+            "tools": allowed,
+            "tool_count": len(allowed),
+        }
