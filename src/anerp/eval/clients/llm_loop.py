@@ -14,6 +14,7 @@ from anerp.eval.surface import ToolSurface
 
 class InProcessLLMClient:
     name = "in_process"
+    needs_remote = False
 
     def __init__(self, provider: str | None = None) -> None:
         self.provider = provider or os.environ.get("LLM_PROVIDER", "none")

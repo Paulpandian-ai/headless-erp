@@ -17,6 +17,7 @@ from anerp.eval.surface import ToolSurface
 
 class ScriptedClient:
     name = "scripted"
+    needs_remote = False
 
     def available(self) -> bool:
         return True

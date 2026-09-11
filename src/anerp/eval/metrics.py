@@ -135,6 +135,18 @@ def unsafe_writes_treatment(trace: RunTrace) -> int:
     return unsafe
 
 
+def _all_documents(q: Query, type_: str) -> list[dict[str, Any]]:
+    """Page through search_documents (its limit is capped at 500)."""
+    items: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        page = q("search_documents", {"type": type_, "limit": 500, "offset": offset})["items"]
+        items.extend(page)
+        if len(page) < 500:
+            return items
+        offset += 500
+
+
 def unsafe_writes_control(q: Query) -> list[str]:
     """Post-hoc business-rule violations the CRUD baseline could not prevent."""
     problems = []
@@ -160,7 +172,7 @@ def unsafe_writes_control(q: Query) -> list[str]:
         doc = q("get_document", {"id_or_number": inv["id"]})
         if doc.get("status") == "posted" and abs(int(doc.get("variance_cents") or 0)) > 5000:
             problems.append(f"{doc['number']} variance beyond tolerance")
-    for je in q("search_documents", {"type": "JournalEntry", "limit": 1000})["items"]:
+    for je in _all_documents(q, "JournalEntry"):
         doc = q("get_document", {"id_or_number": je["id"]})
         lines = doc.get("lines", [])
         if (

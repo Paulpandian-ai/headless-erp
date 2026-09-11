@@ -7,6 +7,7 @@ idempotency, policy or receipts. It deliberately bypasses `core.dispatch`; nothi
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from sqlalchemy import inspect as sa_inspect
@@ -114,11 +115,32 @@ def _coerce(table: str, values: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+CALL_LOG: list[dict[str, Any]] = []
+"""Every crud_call in this process (name, arguments, ok, latency_ms); the runner drains it after
+each run so SDK clients reaching the baseline over HTTP still get a tool-call trace."""
+
+
+def drain_call_log() -> list[dict[str, Any]]:
+    calls = list(CALL_LOG)
+    CALL_LOG.clear()
+    return calls
+
+
 def crud_call(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    t0 = time.perf_counter()
     try:
-        return {"ok": True, "result": _crud(name, args)}
+        out: dict[str, Any] = {"ok": True, "result": _crud(name, args)}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": {"code": "ERROR", "message": f"{type(exc).__name__}: {exc}"}}
+        out = {"ok": False, "error": {"code": "ERROR", "message": f"{type(exc).__name__}: {exc}"}}
+    CALL_LOG.append(
+        {
+            "name": name,
+            "arguments": args,
+            "ok": out["ok"],
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+        }
+    )
+    return out
 
 
 def _crud(name: str, args: dict[str, Any]) -> Any:
@@ -221,4 +243,4 @@ def build_crud_mcp_server() -> Any:
     )
 
 
-__all__ = ["build_crud_mcp_server", "crud_call", "crud_tools", "sa_inspect"]
+__all__ = ["build_crud_mcp_server", "crud_call", "crud_tools", "drain_call_log", "sa_inspect"]

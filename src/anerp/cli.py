@@ -251,6 +251,7 @@ def eval_cmd(
     all_: bool = typer.Option(
         False, "--all", help="Full matrix: every client with credentials, both servers, all tasks"
     ),
+    run_id: str | None = typer.Option(None, help="Name of results/<run_id>/ (default: timestamp)"),
 ) -> None:
     """Run the evaluation matrix (DESIGN.md §14) and write raw.jsonl, summary.csv, report.md."""
     from anerp.eval.runner import run_matrix
@@ -262,6 +263,7 @@ def eval_cmd(
         runs=runs,
         output_dir=output,
         everything=all_,
+        run_id=run_id,
     )
     _print(result)
 

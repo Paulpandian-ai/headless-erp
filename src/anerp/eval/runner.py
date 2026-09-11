@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -12,24 +13,65 @@ from typing import Any
 
 from anerp.core.ids import utcnow
 from anerp.eval.clients import ALL_CLIENTS, make_client
-from anerp.eval.clients.base import RunTrace
+from anerp.eval.clients.base import RunTrace, ToolCallRecord
 from anerp.eval.metrics import record_filtered_counts, run_metrics, snapshot
-from anerp.eval.surface import ControlSurface, RemoteSurface, ToolSurface, TreatmentSurface
+from anerp.eval.surface import (
+    EVAL_AGENT_SCOPES,
+    ControlSurface,
+    LoopbackMcp,
+    RemoteSurface,
+    ToolSurface,
+    TreatmentSurface,
+    control_loopback,
+    treatment_loopback,
+)
 from anerp.eval.tasks_loader import load_tasks
 
 log = logging.getLogger("anerp.eval")
 
 
 class Environment:
-    """Owns a fresh kernel per run: in-process (SQLite memory) or a remote dev deployment."""
+    """Owns a fresh kernel per run.
 
-    def __init__(self, remote_url: str | None = None, remote_token: str | None = None) -> None:
+    Local (the default, and the only configuration where treatment and control are comparable):
+    one database for both arms - `ANERP_EVAL_DATABASE_URL` (a local Postgres) or SQLite in memory -
+    reset through the same `reset_and_seed` tool before every run, with both tool surfaces served
+    from this process on loopback ports (`treatment_url`, `control_url`) for SDK clients.
+
+    Remote (`ANERP_URL` + `ANERP_ADMIN_TOKEN`, treatment only): a deployed anerp reached with a
+    scoped `agent_token`; the admin token stays with the harness for reset, setup and inspection.
+    """
+
+    def __init__(
+        self,
+        remote_url: str | None = None,
+        remote_token: str | None = None,
+        agent_token: str | None = None,
+        agent_subject: str | None = None,
+        database_url: str | None = None,
+    ) -> None:
         self.remote_url = remote_url
         self.remote_token = remote_token
+        self.agent_token = agent_token or remote_token
+        self.agent_subject = agent_subject
+        self.database_url = database_url or "sqlite://"
+        self.treatment_url: str | None = None
+        self.control_url: str | None = None
+        self._engine: Any = None
 
     @property
     def remote(self) -> bool:
         return bool(self.remote_url and self.remote_token)
+
+    @property
+    def backend(self) -> str:
+        if self.remote:
+            return f"remote {self.remote_url}"
+        return (
+            "sqlite memory"
+            if self.database_url == "sqlite://"
+            else self.database_url.split("@")[-1]
+        )
 
     def reset(self) -> None:
         if self.remote:
@@ -52,16 +94,24 @@ class Environment:
         from anerp import db
         from anerp.core.requestlog import request_log, simulations
         from anerp.ledger.receipts import keyring
-        from anerp.seed import seed_fixture
 
-        engine = db.make_engine("sqlite://")
-        db.set_engine(engine)
-        db.init_db(engine)
-        keyring.reset()
-        request_log.clear()
-        simulations.clear()
-        with db.session_scope() as s:
-            seed_fixture(s, "baseline")
+        if self.database_url == "sqlite://":
+            from anerp.seed import seed_fixture
+
+            engine = db.make_engine("sqlite://")
+            db.set_engine(engine)
+            db.init_db(engine)
+            keyring.reset()
+            request_log.clear()
+            simulations.clear()
+            with db.session_scope() as s:
+                seed_fixture(s, "baseline")
+            return
+        if self._engine is None:  # a persistent database: create the schema once, then reset
+            self._engine = db.make_engine(self.database_url)
+            db.set_engine(self._engine)
+            db.init_db(self._engine)
+        self.admin_commit("reset_and_seed", {"fixture_name": "baseline", "confirm": "RESET"})
 
     def admin_query(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         if self.remote:
@@ -111,16 +161,42 @@ class Environment:
             raise RuntimeError(f"setup {tool} failed: {r.get('error')}")
         return r
 
-    def surface(self, server: str) -> ToolSurface:
+    def surface(self, server: str, *, over_http: bool = False) -> ToolSurface:
         if server == "control":
             if self.remote:
                 raise RuntimeError(
                     "the control server runs in-process only (it bypasses the dispatcher)"
                 )
+            if over_http:
+                if not self.control_url:
+                    raise RuntimeError("no loopback control MCP server (Environment.control_url)")
+                return RemoteSurface(self.control_url, "none", name="control")
             return ControlSurface()
         if self.remote:
-            return RemoteSurface(self.remote_url or "", self.remote_token or "")
+            return RemoteSurface(self.remote_url or "", self.agent_token or "")
+        if over_http:
+            if not self.treatment_url:
+                raise RuntimeError("no loopback treatment MCP server (Environment.treatment_url)")
+            return RemoteSurface(self.treatment_url, "none", name="treatment")
         return TreatmentSurface()
+
+    def agent_request_log(self) -> list[dict[str, Any]]:
+        """What the kernel recorded for the agent principal since the last reset, oldest first.
+        The SDK adapters only see the request side of each tool call; the request log is the
+        authoritative source for outcome and error code."""
+        if not self.agent_subject:
+            return []
+        entries: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            page = self.admin_query(
+                "get_request_log", {"actor": self.agent_subject, "limit": 2000, "offset": offset}
+            )["requests"]
+            entries.extend(page)
+            if len(page) < 2000:
+                break
+            offset += len(page)
+        return list(reversed(entries))
 
 
 def _resolve(value: Any, saved: dict[str, str]) -> Any:
@@ -205,17 +281,64 @@ def _merge(trace: RunTrace, part: RunTrace) -> None:
     trace.steps += part.steps
     trace.final_text = part.final_text
     trace.error = part.error or trace.error
+    for k, v in part.extra.items():
+        trace.extra[k] = trace.extra.get(k, 0) + v if isinstance(v, int | float) else v
+
+
+def _server_side_trace(
+    env: Environment, server: str, surface: ToolSurface, trace: RunTrace
+) -> None:
+    """Replace the client-side tool-call list with what the server actually saw when the client
+    reached it over HTTP (SDK adapters cannot observe results). Keeps the client-side count."""
+    if not isinstance(surface, RemoteSurface):
+        return
+    if server == "control":
+        from anerp.eval.crud_server import drain_call_log
+
+        recorded = [
+            ToolCallRecord(c["name"], c["arguments"], c["ok"], None, None, c["latency_ms"])
+            for c in drain_call_log()
+        ]
+    else:
+        recorded = [
+            ToolCallRecord(
+                e["tool"],
+                e.get("payload") or {},
+                e.get("outcome") != "error",
+                e.get("error_code"),
+                e.get("mode") if e.get("mode") in ("simulate", "commit") else None,
+                float(e.get("latency_ms") or 0.0),
+            )
+            for e in env.agent_request_log()
+        ]
+    trace.extra["client_tool_calls"] = len(trace.tool_calls)
+    if recorded or not trace.tool_calls:
+        trace.tool_calls = recorded
+    else:
+        trace.extra["trace_source"] = "client (server log empty)"
 
 
 def run_one(
     env: Environment, client: Any, server: str, task: dict[str, Any], run: int
 ) -> dict[str, Any]:
-    env.reset()
-    apply_setup(env, task)
-    q = env.admin_query
-    before = snapshot(q)
-    record_filtered_counts(q, task, before)
-    surface = env.surface(server)
+    for attempt in range(3):  # a remote deployment can hiccup; a fresh kernel is all-or-nothing
+        try:
+            env.reset()
+            apply_setup(env, task)
+            q = env.admin_query
+            before = snapshot(q)
+            record_filtered_counts(q, task, before)
+            break
+        except Exception:  # noqa: BLE001
+            if attempt == 2 or not env.remote:
+                raise
+            log.warning("reset/setup for %s failed (attempt %s); retrying", task["id"], attempt + 1)
+            time.sleep(5 * (attempt + 1))
+    surface = env.surface(server, over_http=bool(getattr(client, "needs_remote", False)))
+    if server == "control":
+        from anerp.eval.crud_server import drain_call_log
+
+        drain_call_log()
     t0 = time.perf_counter()
     trace = RunTrace()
     rounds = 0
@@ -245,6 +368,8 @@ def run_one(
         log.exception("client %s failed on %s", client.name, task["id"])
         trace.error = f"{type(exc).__name__}: {exc}"
     wall = time.perf_counter() - t0
+    with contextlib.suppress(Exception):
+        _server_side_trace(env, server, surface, trace)
     metrics = run_metrics(q, task, before, trace, server, wall)
     metrics["rounds"] = rounds
     return {
@@ -267,12 +392,15 @@ def run_matrix(
     runs: int,
     output_dir: str,
     everything: bool = False,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
+    """Both arms run against one local kernel (ANERP_EVAL_DATABASE_URL, else SQLite in memory),
+    each tool surface served from this process on a loopback port when a client needs HTTP, so
+    treatment and control differ only in the tool surface. Setting ANERP_EVAL_REMOTE=1 with
+    ANERP_URL and ANERP_ADMIN_TOKEN instead runs the treatment arm against that deployment (the
+    agents get a freshly minted, scoped token) - useful for demos, not for the comparison."""
     from anerp.eval.report import write_outputs
 
-    remote_url = os.environ.get("ANERP_URL")
-    remote_token = os.environ.get("ANERP_ADMIN_TOKEN")
-    env = Environment(remote_url if remote_url and remote_token else None, remote_token)
     chosen = []
     for name in ALL_CLIENTS if everything else clients:
         c = make_client(name)
@@ -285,31 +413,82 @@ def run_matrix(
             "no eval client is available: set LLM_PROVIDER / API keys, or use --clients scripted"
         )
     task_list = load_tasks(tasks)
-    run_id = utcnow().strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
+    run_id = run_id or utcnow().strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
     run_dir = Path(output_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    over_http = any(getattr(c, "needs_remote", False) for c in chosen)
+
+    agent_subject = "agent:eval"
+    local_env = Environment(
+        database_url=os.environ.get("ANERP_EVAL_DATABASE_URL"), agent_subject=agent_subject
+    )
+    remote_env: Environment | None = None
+    minted_token_id: str | None = None
+    remote_url = os.environ.get("ANERP_URL")
+    remote_token = os.environ.get("ANERP_ADMIN_TOKEN")
+    if os.environ.get("ANERP_EVAL_REMOTE") == "1" and remote_url and remote_token:
+        remote_env = Environment(remote_url, remote_token)
+        subject = f"agent:eval-{run_id}"
+        minted = remote_env.admin_commit(
+            "mint_token", {"subject": subject, "kind": "agent", "scopes": EVAL_AGENT_SCOPES}
+        )
+        minted_token_id = minted["secret"].get("token_id") or subject
+        remote_env = Environment(
+            remote_url,
+            remote_token,
+            agent_token=minted["secret"]["token"],
+            agent_subject=subject,
+        )
+        log.info("treatment arm on %s; minted agent token %s", remote_url, subject)
+    loopbacks: list[LoopbackMcp] = []
+    if over_http:
+        local_env.reset()  # bind the engine before the servers take requests
+        if "treatment" in servers and remote_env is None:
+            lb = treatment_loopback(agent_subject).start()
+            local_env.treatment_url = lb.url
+            loopbacks.append(lb)
+        if "control" in servers:
+            lb = control_loopback().start()
+            local_env.control_url = lb.url
+            loopbacks.append(lb)
+        for lb in loopbacks:
+            log.info("%s surface served at %s (kernel: %s)", lb.name, lb.url, local_env.backend)
+
     rows: list[dict[str, Any]] = []
-    with (run_dir / "raw.jsonl").open("w") as f:
-        for server in servers:
-            for client in chosen:
-                for task in task_list:
-                    for run in range(1, runs + 1):
-                        row = run_one(env, client, server, task, run)
-                        rows.append(row)
-                        f.write(json.dumps(row, default=str) + "\n")
-                        f.flush()
-                        log.info(
-                            "%s/%s/%s run %s: success=%s",
-                            server,
-                            client.name,
-                            task["id"],
-                            run,
-                            row["metrics"]["success"],
-                        )
+    try:
+        with (run_dir / "raw.jsonl").open("w") as f:
+            for server in servers:
+                env = remote_env if server == "treatment" and remote_env else local_env
+                for client in chosen:
+                    for task in task_list:
+                        for run in range(1, runs + 1):
+                            row = run_one(env, client, server, task, run)
+                            row["backend"] = env.backend
+                            rows.append(row)
+                            f.write(json.dumps(row, default=str) + "\n")
+                            f.flush()
+                            log.info(
+                                "%s/%s/%s run %s: success=%s",
+                                server,
+                                client.name,
+                                task["id"],
+                                run,
+                                row["metrics"]["success"],
+                            )
+    finally:
+        for lb in loopbacks:
+            lb.stop()
+        if remote_env and minted_token_id:
+            with contextlib.suppress(Exception):
+                remote_env.admin_commit(
+                    "revoke_token",
+                    {"token_id": minted_token_id, "reason": f"eval matrix {run_id} finished"},
+                )
     files = write_outputs(run_dir, rows)
     return {
         "run_id": run_id,
         "runs": len(rows),
         "successes": sum(1 for r in rows if r["metrics"]["success"]),
+        "backends": sorted({r["backend"] for r in rows}),
         **files,
     }

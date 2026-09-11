@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.40"]
+anthropic = ["anthropic>=0.40", "claude-agent-sdk>=0.1"]
 openai = ["openai>=1.50", "openai-agents>=0.1"]
 google = ["google-adk>=1.0"]
 eval = ["matplotlib>=3.9"]

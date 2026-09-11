@@ -1,4 +1,4 @@
-# Manual: run the evaluation matrix against the dev deployment and upload results as an artifact.
+# Manual: run the evaluation matrix (both arms on one local Postgres) and upload results as an artifact.
 name: eval
 on:
   workflow_dispatch:
@@ -19,17 +19,28 @@ on:
 jobs:
   eval:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: anerp
+          POSTGRES_PASSWORD: anerp
+          POSTGRES_DB: anerp_eval
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
       - run: uv sync --all-extras --dev
+      - name: Isolated interpreter for google-adk (needs mcp 1.x)
+        run: uv venv .venv-adk --python 3.12 && uv pip install --python .venv-adk/bin/python google-adk "mcp<2"
       - name: Run matrix
-        run: uv run anerp eval --clients "${{ inputs.clients }}" --runs "${{ inputs.runs }}" --tasks "${{ inputs.tasks }}" --output results
+        run: uv run --all-extras anerp eval --clients "${{ inputs.clients }}" --runs "${{ inputs.runs }}" --tasks "${{ inputs.tasks }}" --output results
         env:
-          ANERP_URL: ${{ vars.ANERP_DEV_URL }}
-          ANERP_ADMIN_TOKEN: ${{ secrets.ANERP_DEV_ADMIN_TOKEN }}
+          ANERP_ENV: dev
+          ANERP_EVAL_DATABASE_URL: postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
