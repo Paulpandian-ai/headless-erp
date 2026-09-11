@@ -184,27 +184,17 @@ between agent rounds (accepting at the expected quantities unless the task overr
 duplicate document rate, recovery success, cost (tokens, tool calls, wall clock), trial-balance
 integrity.
 
-Both arms run against **one local kernel in the harness process** so they differ in nothing but
-the tool surface: the same database (`ANERP_EVAL_DATABASE_URL`, a local Postgres; SQLite in memory
-if unset), reset through `reset_and_seed` before every run, with each surface served on a loopback
-port for the SDK adapters (which only speak MCP over HTTP). The agents act as `agent:eval` with
-the scopes in `surface.EVAL_AGENT_SCOPES`; admin tools are hidden from both arms. Tool outcomes and
-error codes come from the kernel's request log, not from the client, so the unsafe-write and
-simulate-before-commit metrics are the same whichever SDK made the call.
+Both arms run against **one local kernel in the harness process** (the Postgres from
+`docker-compose.yml`), each tool surface served on a loopback port for the SDK adapters, so
+treatment and control differ in nothing but the tool surface. Setup, running, models and the
+google-adk interpreter are documented in [`src/anerp/eval/README.md`](src/anerp/eval/README.md).
 
 ```bash
-uv run anerp eval --clients scripted --servers treatment            # harness self-test, no LLM
-ANERP_EVAL_DATABASE_URL=postgresql+psycopg://…@127.0.0.1/anerp_eval \
-  uv run --all-extras anerp eval --clients claude_agent_sdk,openai_agents_sdk,google_adk --runs 3
+docker compose up -d --wait
+export ANERP_EVAL_DATABASE_URL=postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval
+uv run --all-extras anerp eval --clients scripted --servers treatment            # self-test, no LLM
+uv run --all-extras anerp eval --clients claude_agent_sdk,openai_agents_sdk,google_adk --runs 3
 ```
-
-Models are pinned per adapter (`ANERP_ANTHROPIC_MODEL`, `ANERP_OPENAI_MODEL`, `ANERP_GOOGLE_MODEL`;
-defaults in each adapter). `google-adk` needs `mcp` 1.x while anerp runs `mcp` 2.x, so the ADK
-loop runs as a subprocess in its own interpreter: `uv venv .venv-adk && uv pip install --python
-.venv-adk/bin/python google-adk "mcp<2"` (or point `ANERP_GOOGLE_ADK_PYTHON` elsewhere).
-`ANERP_EVAL_REMOTE=1` with `ANERP_URL`/`ANERP_ADMIN_TOKEN` runs the treatment arm against a
-deployment instead (a scoped agent token is minted and revoked per matrix) - for demos, not for
-the comparison, since it confounds latency and error behaviour with the network.
 
 Outputs: `results/<run_id>/raw.jsonl`, `summary.csv`, `report.md` (and `success.png` when
 matplotlib is installed). `eval.yml` runs the matrix from GitHub Actions against a Postgres

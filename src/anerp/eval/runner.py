@@ -108,7 +108,17 @@ class Environment:
                 seed_fixture(s, "baseline")
             return
         if self._engine is None:  # a persistent database: create the schema once, then reset
-            self._engine = db.make_engine(self.database_url)
+            engine = db.make_engine(self.database_url)
+            try:
+                with engine.connect():
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"eval database {self.backend} is not reachable ({type(exc).__name__}). "
+                    "Start it with `docker compose up -d --wait` (see src/anerp/eval/README.md) "
+                    "or unset ANERP_EVAL_DATABASE_URL to use SQLite in memory."
+                ) from exc
+            self._engine = engine
             db.set_engine(self._engine)
             db.init_db(self._engine)
         self.admin_commit("reset_and_seed", {"fixture_name": "baseline", "confirm": "RESET"})

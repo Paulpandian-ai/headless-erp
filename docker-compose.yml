@@ -1,0 +1,22 @@
+# Local services for the evaluation harness (DESIGN.md §14). The ERP itself is not containerised
+# here (it deploys to Railway from main); this only brings up the kernel database both eval arms
+# share, so `docker compose up -d --wait && uv run --all-extras anerp eval ...` works on a clean
+# machine. Credentials are throwaway and loopback-only; the CI eval workflow uses the same ones.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: anerp
+      POSTGRES_PASSWORD: anerp
+      POSTGRES_DB: anerp_eval
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - anerp-eval-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anerp -d anerp_eval"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  anerp-eval-pg:
