@@ -385,6 +385,7 @@ def run_one(
     return {
         "server": server,
         "client": client.name,
+        "model": getattr(client, "model", None),
         "task": task["id"],
         "run": run,
         "traps": task.get("traps", []),
