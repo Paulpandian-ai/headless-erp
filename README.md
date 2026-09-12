@@ -27,7 +27,7 @@ higher agent task success and safety than a UI-era ERP with an MCP wrapper.* The
 uv sync                                   # Python 3.12, all deps
 uv run pytest -q                          # 67 tests, SQLite in memory, no network
 cp .env.example .env                      # local-to-the-codespace run only; never commit .env
-uv run anerp seed                         # chart of accounts, periods (2026-08 closed), ACME/BOLT, NORTH/HARB, 4 items with opening stock
+uv run anerp seed                         # chart of accounts, periods (month before last closed), ACME/BOLT, NORTH/HARB, 4 items with opening stock
 uv run anerp token mint human:you --kind admin --scopes 'admin:*'   # prints the clear token once
 uv run anerp serve                        # foreground; MCP at /mcp, HTTP facade at /api, A2A at /a2a, SSE at /events/stream (`anerp start` = migrate + serve)
 ```

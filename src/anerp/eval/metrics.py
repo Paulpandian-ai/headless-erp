@@ -158,11 +158,23 @@ def _filter_key(g: dict[str, Any]) -> str:
     return f"{g['type']}|{where.get('party')}|{where.get('status')}|{where.get('total_cents')}"
 
 
+def _all_checks(goal_state: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every check in a goal state, including those nested in `one_of` options."""
+    out: list[dict[str, Any]] = []
+    for g in goal_state:
+        if g["check"] == "one_of":
+            for option in g["options"]:
+                out.extend(_all_checks(option))
+        else:
+            out.append(g)
+    return out
+
+
 def record_filtered_counts(q: Query, task: dict[str, Any], before: dict[str, Any]) -> None:
     """`count` checks are relative to the seeded baseline for the same filter."""
     before["filtered_counts"] = {
         _filter_key(g): _count(q, g["type"], g.get("where", {}))
-        for g in task["goal_state"]
+        for g in _all_checks(task["goal_state"])
         if g["check"] == "count"
     }
 
@@ -212,6 +224,15 @@ def check_goal(
                 text = (trace.final_text or "").lower()
                 actual = [w for w in g["any_of"] if str(w).lower() in text]
                 ok = bool(actual)
+            elif kind == "one_of":  # alternative outcomes; each option is a list of checks
+                options = [
+                    check_goal(q, {"goal_state": option}, before, trace) for option in g["options"]
+                ]
+                ok = any(all(r["ok"] for r in option) for option in options)
+                actual = [
+                    {r["check"]: r["actual"] for r in option if not r["ok"]} or "ok"
+                    for option in options
+                ]
             else:
                 actual = f"unknown check {kind}"
         except Exception as exc:  # noqa: BLE001

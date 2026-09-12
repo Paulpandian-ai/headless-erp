@@ -76,9 +76,43 @@ tool-call trace), `summary.csv` and `report.md` (per server x client x task, the
 probe (about $1 per adapter) before the full matrix. Runs on one kernel are sequential; budget
 roughly 60-90 s per run.
 
-Models are pinned per adapter and recorded with the run: `ANERP_ANTHROPIC_MODEL`
-(`claude-opus-5`), `ANERP_OPENAI_MODEL` (`gpt-5`), `ANERP_GOOGLE_MODEL`
-(`gemini-3.1-pro-preview`; `gemini-2.5-pro` is retired for new users).
+Models are pinned per adapter and recorded on every row (`model` in `raw.jsonl` and
+`summary.csv`): `ANERP_ANTHROPIC_MODEL`, `ANERP_OPENAI_MODEL`, `ANERP_GOOGLE_MODEL`. The local
+defaults are each vendor's strongest tier (`claude-opus-5`, `gpt-5`, `gemini-3.1-pro-preview`;
+`gemini-2.5-pro` is retired for new users).
+
+## The matrix on GitHub Actions
+
+`.github/workflows/eval.yml` (manual dispatch) runs the paper's matrix: one job per client x
+server against its own Postgres service container - a single job would exceed the 6-hour
+limit at 60-90 s per run - then a `merge` job that rebuilds `summary.csv`, `latency.csv` and
+`report.md` over every row with `anerp eval-merge` and uploads `results/<run_id>/` as an
+artifact (`commit_results` also commits it to the branch). Its defaults are the **tier-matched
+cross-vendor comparison**: each vendor's current mid-tier model (`claude-sonnet-5`,
+`gpt-5.6-terra`, `gemini-3.8-flash`), both arms, all 20 tasks, 3 runs; the model inputs
+override the tier. `results/claude-both-arms-1run` (claude-opus-5, one run) is kept as a
+separate "strongest model" data point outside that comparison. The three API keys are
+repository secrets.
+
+## The human in the loop, on both arms
+
+Tasks with `human_loop: [goods_acceptance]` need a warehouse count. Between agent rounds the
+harness plays the warehouse with the same numbers on both arms (`runner.human_step`): on
+treatment it accepts the pending `goods_acceptance` request through `accept_goods`, which posts
+the receipt, and tells the agent; on control - where there is no request to accept and no tool
+that posts anything - it tells the agent the count in the same status line and notes that no
+receipt has been entered. Both agents then get the narrative plus the status update for the next
+round. Recording the receipt itself on the control arm is part of what that surface costs.
+
+## Periods and the close tasks
+
+The baseline fixture's calendar is relative to the date (`seed.baseline_periods`): the month
+before last is closed, last month (with the opening balances) and this month are open.
+`close_01_clean`/`close_02_blocked` close **last month** (`{previous_period}`), a finished
+period, and `gl_03_closed_period` posts into the closed one (`{closed_period}`). `close_01`
+accepts two outcomes (`one_of` in the YAML): the period closed, or left open with the report
+asking a human to confirm - an agent that finds the checklist green and stops for sign-off
+before an irreversible-looking step is not wrong.
 
 If the database is down the harness stops before the first run with a message pointing here.
 
@@ -86,7 +120,7 @@ If the database is down the harness stops before the first run with a message po
 
 `--clients scripted --servers treatment,control` runs the deterministic oracle on both surfaces:
 on treatment it follows simulate-then-commit; on control (`clients/scripted_crud.py`) it is the
-best-case CRUD agent. No model is called, so it gives a floor for tool calls per task and a
+best-case CRUD agent. Both wait for the warehouse's status line like any other agent. No model is called, so it gives a floor for tool calls per task and a
 per-call latency comparison of the two surfaces on the same kernel; `report.md` and
 `latency.csv` carry the median/p95 per arm and the per-task call counts. It is not an LLM result
 and does not go in the paper's matrix.
@@ -96,9 +130,8 @@ nothing but row access, so the oracle hand-implements the kernel's bookkeeping a
 the script itself: document numbering, every journal entry and its lines, open items, stock
 movements, line quantities and statuses, the approval threshold, the price tolerance, the credit
 limit, the stock check and the closed-period check. It never mistypes a column, never forgets
-the GR/IR side of a receipt, never posts into a closed period, and knows the warehouse's count
-in advance. An LLM agent on the same surface has to discover all of that from column names and
-gets none of it enforced; the paper's control numbers come from those agents, not from this
+the GR/IR side of a receipt, and never posts into a closed period. An LLM agent on the same
+surface has to discover all of that from column names and gets none of it enforced; the paper's control numbers come from those agents, not from this
 script. The one task it cannot pass (`p2p_04`) fails because the CRUD surface has no approval
 request to raise, not because the script got it wrong.
 

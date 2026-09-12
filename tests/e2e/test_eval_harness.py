@@ -5,11 +5,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from anerp.eval.clients.base import RunTrace
 from anerp.eval.clients.scripted import ScriptedClient
 from anerp.eval.crud_server import crud_call, crud_tools
-from anerp.eval.metrics import duplicate_documents, snapshot
+from anerp.eval.metrics import check_goal, duplicate_documents, record_filtered_counts, snapshot
 from anerp.eval.report import latency, load_raw, summarize
-from anerp.eval.runner import Environment, run_matrix, run_one
+from anerp.eval.runner import Environment, apply_setup, human_step, run_matrix, run_one
 from anerp.eval.tasks_loader import load_tasks
 
 
@@ -120,6 +121,67 @@ def test_scripted_client_on_control_surface() -> None:
 
 
 CRUD_TOOLS = {"list_tables", "list_rows", "get_row", "insert_row", "update_row"}
+
+
+def test_human_loop_is_the_same_on_both_arms() -> None:
+    """The warehouse count reaches the agent on both arms between rounds, with the same numbers
+    (the task's acceptance override), and the control agent gets it only once per PO."""
+    env = Environment()
+    client = ScriptedClient()
+    task = next(t for t in load_tasks(["p2p_02_partial_receipt"]))
+    rows = {server: run_one(env, client, server, task, 1) for server in ("treatment", "control")}
+    for server, row in rows.items():
+        assert row["metrics"]["success"], (server, row["metrics"]["goal"])
+        assert row["metrics"]["rounds"] == 2, server
+    # the control arm's status line names the same count the treatment warehouse accepted
+    env.reset()
+    apply_setup(env, task)
+    env.admin_commit(
+        "create_purchase_order",
+        {"supplier": "BOLT", "lines": [{"sku": "FLANGE-4", "qty": 200, "unit_cost": "15.00"}]},
+    )
+    state: dict = {}
+    first = human_step(env, task, "control", state)
+    assert len(first) == 1 and "FLANGE-4 x80" in first[0] and "no goods receipt" in first[0]
+    assert human_step(env, task, "control", state) == []  # reported once
+
+
+def test_one_of_accepts_either_close_outcome() -> None:
+    env = Environment()
+    client = ScriptedClient()
+    task = next(t for t in load_tasks(["close_01_clean"]))
+    closed = run_one(env, client, "treatment", task, 1)
+    assert closed["metrics"]["success"]
+    # an agent that runs the checklist and asks for sign-off instead of closing also passes
+    env.reset()
+    q = env.admin_query
+    before = snapshot(q)
+    record_filtered_counts(q, task, before)
+    trace = RunTrace(final_text="Checklist is green; please confirm before I close the period.")
+    goal = check_goal(q, task, before, trace)
+    assert all(g["ok"] for g in goal), goal
+    trace = RunTrace(final_text="I looked at it.")
+    assert not check_goal(q, task, before, trace)[0]["ok"]
+
+
+def test_seed_calendar_matches_task_placeholders() -> None:
+    from anerp.eval.tasks_loader import placeholders
+
+    ph = placeholders()
+    env = Environment()
+    env.reset()
+    assert (
+        env.admin_query("get_period", {"period_code": ph["closed_period"]})["period"]["status"]
+        == "closed"
+    )
+    assert (
+        env.admin_query("get_period", {"period_code": ph["previous_period"]})["period"]["status"]
+        == "open"
+    )
+    assert (
+        env.admin_query("get_period", {"period_code": ph["current_period"]})["period"]["status"]
+        == "open"
+    )
 
 
 def test_control_surface_and_matrix_outputs(tmp_path: Path) -> None:

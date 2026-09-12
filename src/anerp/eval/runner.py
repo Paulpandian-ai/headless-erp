@@ -227,16 +227,69 @@ def apply_setup(env: Environment, task: dict[str, Any]) -> None:
             saved[step["save_as"]] = r["document"]["number"]
 
 
-def human_step(env: Environment, task: dict[str, Any]) -> list[str]:
-    """Play the human in the loop for the kinds the task allows: the warehouse counts and accepts
-    deliveries (at the expected quantities unless `acceptance` overrides a SKU), and an approver
-    approves draft POs. Returns human-readable status lines for the agent's next round."""
+def _counted(task: dict[str, Any], expected: dict[str, int]) -> tuple[list[dict[str, Any]], str]:
+    """What the warehouse counts for a delivery: the expected quantities unless the task's
+    `acceptance` overrides a SKU. Same numbers on both arms."""
+    overrides = {o["sku"]: o for o in task.get("acceptance", [])}
+    accepted = [
+        {
+            "sku": sku,
+            "qty": overrides.get(sku, {}).get("qty", qty),
+            "damaged_qty": overrides.get(sku, {}).get("damaged_qty", 0),
+            "note": overrides.get(sku, {}).get("note", ""),
+        }
+        for sku, qty in expected.items()
+    ]
+    counts = ", ".join(
+        f"{a['sku']} x{a['qty']}" + (f" ({a['damaged_qty']} damaged)" if a["damaged_qty"] else "")
+        for a in accepted
+    )
+    return accepted, counts
+
+
+def human_step(
+    env: Environment,
+    task: dict[str, Any],
+    server: str = "treatment",
+    state: dict[str, Any] | None = None,
+) -> list[str]:
+    """Play the human in the loop for the kinds the task allows, between agent rounds, on both
+    arms with the same information. Treatment: the warehouse counts and accepts deliveries through
+    `accept_goods` (which posts the receipt) and an approver approves draft POs. Control: the CRUD
+    surface has no approval requests and no tool that posts anything, so the same warehouse count
+    is handed to the agent as a plain-text status line for every PO with an outstanding delivery,
+    once per PO; recording it is the agent's job, as everything is on that surface. Returns
+    human-readable status lines for the agent's next round."""
     updates: list[str] = []
     kinds = task.get("human_loop") or []
     if not kinds:
         return updates
+    if server == "control":
+        if "goods_acceptance" not in kinds:
+            return updates
+        reported: set[str] = (state if state is not None else {}).setdefault("reported_pos", set())
+        for po in env.admin_query("search_documents", {"type": "PurchaseOrder", "limit": 500})[
+            "items"
+        ]:
+            if po["status"] in ("draft", "cancelled") or po["id"] in reported:
+                continue
+            doc = env.admin_query("get_document", {"id_or_number": po["id"]})
+            if any(g.get("status") != "reversed" for g in doc.get("goods_receipts", [])):
+                continue  # a receipt already stands against this PO
+            expected = {
+                line["sku"]: line["qty"] - line["received_qty"]
+                for line in doc.get("lines", [])
+                if line["qty"] > line["received_qty"]
+            }
+            if not expected:
+                continue
+            reported.add(po["id"])
+            _, counts = _counted(task, expected)
+            updates.append(
+                f"the warehouse counted and accepted the delivery for purchase order {po['number']}: {counts}; no goods receipt has been entered for it yet"
+            )
+        return updates
     pending = env.admin_query("list_pending_approvals", {})["pending"]
-    overrides = {o["sku"]: o for o in task.get("acceptance", [])}
     for req in pending:
         if req["kind"] == "goods_acceptance" and "goods_acceptance" in kinds:
             expected = {
@@ -250,15 +303,7 @@ def human_step(env: Environment, task: dict[str, Any]) -> list[str]:
                     for line in po["lines"]
                     if line["qty"] > line["received_qty"]
                 }
-            accepted = [
-                {
-                    "sku": sku,
-                    "qty": overrides.get(sku, {}).get("qty", qty),
-                    "damaged_qty": overrides.get(sku, {}).get("damaged_qty", 0),
-                    "note": overrides.get(sku, {}).get("note", ""),
-                }
-                for sku, qty in expected.items()
-            ]
+            accepted, counts = _counted(task, expected)
             r = env.admin_commit(
                 "accept_goods",
                 {
@@ -266,11 +311,6 @@ def human_step(env: Environment, task: dict[str, Any]) -> list[str]:
                     "accepted_lines": accepted,
                     "comment": "counted by the warehouse (eval harness)",
                 },
-            )
-            counts = ", ".join(
-                f"{a['sku']} x{a['qty']}"
-                + (f" ({a['damaged_qty']} damaged)" if a["damaged_qty"] else "")
-                for a in accepted
             )
             updates.append(
                 f"the warehouse accepted delivery {r['document']['number']} for purchase order {req['document_number']}: {counts}"
@@ -352,6 +392,7 @@ def run_one(
     t0 = time.perf_counter()
     trace = RunTrace()
     rounds = 0
+    human_state: dict[str, Any] = {}
     try:
         narrative = task["narrative"]
         for _ in range(int(task.get("repeat", 1))):
@@ -363,7 +404,7 @@ def run_one(
             )
             rounds += 1
         for _ in range(int(task.get("max_rounds", 3)) - 1):
-            updates = human_step(env, task) if server == "treatment" else []
+            updates = human_step(env, task, server, human_state)
             if not updates:
                 break
             narrative = f"{task['narrative']} Status update: {'; '.join(updates)}. Continue from there; do not repeat what is already done."

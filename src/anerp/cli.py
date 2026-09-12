@@ -1,4 +1,4 @@
-"""anerp CLI: serve | mcp --stdio | migrate | seed | keygen | token | trace | tb | verify-receipt | recon | eval.
+"""anerp CLI: serve | mcp --stdio | migrate | seed | keygen | token | trace | tb | verify-receipt | recon | eval | eval-merge.
 
 The CLI is a thin client of the same tools (in-process dispatch or HTTP with a token), never a
 privileged path (DESIGN.md §7.7).
@@ -266,6 +266,27 @@ def eval_cmd(
         run_id=run_id,
     )
     _print(result)
+
+
+@app.command("eval-merge")
+def eval_merge_cmd(
+    inputs: list[str] = typer.Argument(..., help="results/<run_id>/ directories to merge"),
+    output: str = typer.Option("results"),
+    run_id: str = typer.Option(..., help="Name of the merged results/<run_id>/"),
+) -> None:
+    """Merge the raw.jsonl of several runs (e.g. one per client x server job in CI) into one
+    results/<run_id>/ and regenerate summary.csv, latency.csv and report.md over all rows."""
+    from pathlib import Path
+
+    from anerp.eval.report import load_raw, write_outputs
+
+    rows = [row for d in inputs for row in load_raw(Path(d) / "raw.jsonl")]
+    run_dir = Path(output) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with (run_dir / "raw.jsonl").open("w") as f:
+        for row in rows:
+            f.write(json.dumps(row, default=str) + "\n")
+    _print({"run_id": run_id, "runs": len(rows), "inputs": inputs, **write_outputs(run_dir, rows)})
 
 
 if __name__ == "__main__":

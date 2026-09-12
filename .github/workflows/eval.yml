@@ -1,24 +1,69 @@
-# Manual: run the evaluation matrix (both arms on one local Postgres) and upload results as an artifact.
+# Manual: run the evaluation matrix (DESIGN.md §14) on GitHub Actions and upload results as an
+# artifact. One job per client x server against its own Postgres service container (a single job
+# would exceed the 6-hour limit at ~60-90 s per run), then a merge job that rebuilds
+# summary.csv, latency.csv and report.md over every row with `anerp eval-merge`.
+#
+# Defaults are the tier-matched cross-vendor comparison: each vendor's mid-tier model, both arms,
+# all 20 tasks, 3 runs. Override the model inputs to run a different tier.
 name: eval
 on:
   workflow_dispatch:
     inputs:
       clients:
-        description: "Comma-separated client adapters (claude_agent_sdk,openai_agents_sdk,google_adk)"
-        default: "claude_agent_sdk"
+        description: "Comma-separated client adapters"
+        default: "claude_agent_sdk,openai_agents_sdk,google_adk"
+      servers:
+        description: "Comma-separated tool surfaces"
+        default: "treatment,control"
       runs:
         description: "Runs per task x client x server"
         default: "3"
       tasks:
         description: "Comma-separated task ids or 'all'"
         default: "all"
-      commit_summary:
-        description: "Commit results/summary.csv back to the repo"
+      run_id:
+        description: "Name of results/<run_id>/ (default: matrix-<workflow run number>)"
+        default: ""
+      anthropic_model:
+        description: "ANERP_ANTHROPIC_MODEL"
+        default: "claude-sonnet-5"
+      openai_model:
+        description: "ANERP_OPENAI_MODEL"
+        default: "gpt-5-mini"
+      google_model:
+        description: "ANERP_GOOGLE_MODEL"
+        default: "gemini-2.5-flash"
+      commit_results:
+        description: "Commit the merged results/<run_id>/ back to the branch"
         type: boolean
         default: false
+
+env:
+  RUN_ID: ${{ inputs.run_id != '' && inputs.run_id || format('matrix-{0}', github.run_number) }}
+
 jobs:
-  eval:
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        shell: python
+        run: |
+          import json, os
+          clients = [c.strip() for c in "${{ inputs.clients }}".split(",") if c.strip()]
+          servers = [s.strip() for s in "${{ inputs.servers }}".split(",") if s.strip()]
+          include = [{"client": c, "server": s} for c in clients for s in servers]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=" + json.dumps({"include": include}) + "\n")
+
+  arm:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     services:
       postgres:
         image: postgres:17
@@ -35,21 +80,57 @@ jobs:
           python-version: "3.12"
       - run: uv sync --all-extras --dev
       - name: Isolated interpreter for google-adk (needs mcp 1.x)
+        if: matrix.client == 'google_adk'
         run: uv venv .venv-adk --python 3.12 && uv pip install --python .venv-adk/bin/python google-adk "mcp<2"
-      - name: Run matrix
-        run: uv run --all-extras anerp eval --clients "${{ inputs.clients }}" --runs "${{ inputs.runs }}" --tasks "${{ inputs.tasks }}" --output results
+      - name: Run ${{ matrix.client }} on ${{ matrix.server }}
+        run: >
+          uv run --all-extras anerp eval
+          --clients "${{ matrix.client }}" --servers "${{ matrix.server }}"
+          --runs "${{ inputs.runs }}" --tasks "${{ inputs.tasks }}"
+          --output results --run-id "${RUN_ID}-${{ matrix.client }}-${{ matrix.server }}"
         env:
           ANERP_ENV: dev
           ANERP_EVAL_DATABASE_URL: postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval
+          ANERP_ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
+          ANERP_OPENAI_MODEL: ${{ inputs.openai_model }}
+          ANERP_GOOGLE_MODEL: ${{ inputs.google_model }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: eval-results
-          path: results/
-      - name: Commit summary
-        if: ${{ inputs.commit_summary }}
+          name: eval-arm-${{ matrix.client }}-${{ matrix.server }}
+          path: results/${{ env.RUN_ID }}-${{ matrix.client }}-${{ matrix.server }}/
+          if-no-files-found: warn
+
+  merge:
+    needs: arm
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --dev
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: eval-arm-*
+          path: arms
+      - name: Merge arms
+        run: |
+          inputs=$(ls -d arms/eval-arm-*/ 2>/dev/null)
+          test -n "$inputs" || { echo "no arm produced results"; exit 1; }
+          uv run anerp eval-merge $inputs --output results --run-id "${RUN_ID}"
+          cat "results/${RUN_ID}/report.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ env.RUN_ID }}
+          path: results/${{ env.RUN_ID }}/
+      - name: Commit results
+        if: ${{ inputs.commit_results }}
         run: |
           git config user.name "anerp-eval"; git config user.email "eval@users.noreply.github.com"
-          git add -f results/*/summary.csv && git commit -m "eval: add summary for $(ls -t results | head -1)" && git push
+          git add -f "results/${RUN_ID}/"{raw.jsonl,summary.csv,latency.csv,report.md}
+          git commit -m "eval: results for ${RUN_ID}" && git push

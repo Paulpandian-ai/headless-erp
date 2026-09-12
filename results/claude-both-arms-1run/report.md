@@ -4,10 +4,10 @@ Runs: 40. Grouped per server x client x task (DESIGN.md §14.4).
 
 ## Headline (per server x client, averaged over tasks)
 
-| server | client | tasks | success | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |
-|---|---|---|---|---|---|---|---|---|---|---|
-| control | claude_agent_sdk | 20 | 0.55 | 0.0 | None | 0.0 | 0.333 | 25.3 | 80.484 | 1.0 |
-| treatment | claude_agent_sdk | 20 | 1.0 | 0.0 | 1.0 | 0.0 | 1.0 | 16.0 | 53.148 | 1.0 |
+| server | client | model | tasks | success | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| control | claude_agent_sdk | claude-opus-5 | 20 | 0.55 | 0.0 | None | 0.0 | 0.333 | 25.3 | 80.484 | 1.0 |
+| treatment | claude_agent_sdk | claude-opus-5 | 20 | 1.0 | 0.0 | 1.0 | 0.0 | 1.0 | 16.0 | 53.148 | 1.0 |
 
 ## Per task
 

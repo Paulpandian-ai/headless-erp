@@ -7,10 +7,11 @@ statuses. It is the same twenty tasks as the treatment script, so tool-call coun
 are comparable per task, but it is NOT an LLM agent: it shows what the CRUD surface costs even
 when nothing goes wrong.
 
-Two things the control surface cannot express are left as they are: the CRUD tools have no
-approval requests (`p2p_04` cannot park a draft PO for a human) and no human loop (the harness
-plays the warehouse only on the treatment arm), so this script records a delivery itself at the
-task's expected or overridden count - exactly the numbers the harness's warehouse would use.
+One thing the control surface cannot express is left as it is: the CRUD tools have no approval
+requests, so `p2p_04` cannot park a draft PO for a human. The warehouse works the same way on
+both arms: the script stops after ordering, the harness's human step reports the count as a
+status line (`runner.human_step`), and on the next round the script records the receipt at that
+count - on this surface nothing posts it for you.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ from typing import Any
 
 from anerp.eval.clients.base import RunTrace, ToolCallRecord
 from anerp.eval.surface import ToolSurface
-from anerp.eval.tasks_loader import load_tasks
 
 # The company's rules, as the oracle knows them (policies/default.yaml). On the CRUD surface
 # nothing enforces them; the script applies them itself so its behaviour matches the kernel's.
@@ -81,8 +81,6 @@ class CrudRunner:
         self.surface = surface
         self.trace = trace
         self.task_id = task_id
-        base_id = task_id.split("__")[0]
-        self.task = next((t for t in load_tasks([base_id])), None)
         self.now = datetime.now(UTC).replace(microsecond=0)
         self.today = self.now.date().isoformat()
         self.notes: list[str] = []
@@ -695,9 +693,16 @@ class CrudRunner:
         self.notes.append(f"CreditNote {number}")
 
     # ---- state-driven procure-to-pay (mirrors the treatment script) ------------------------
-    def _accepted_counts(self) -> dict[str, int]:
-        """What the warehouse would have counted (the harness's human step, treatment only)."""
-        return {o["sku"]: int(o["qty"]) for o in (self.task or {}).get("acceptance", [])}
+    @staticmethod
+    def _warehouse_count(narrative: str, po_number: str) -> dict[str, int] | None:
+        """The count the harness's warehouse reported for this PO in a status update, if any."""
+        m = re.search(
+            rf"delivery for purchase order {re.escape(po_number)}: ([^;]+); no goods receipt",
+            narrative,
+        )
+        if not m:
+            return None
+        return {sku: int(qty) for sku, qty in re.findall(r"([A-Z0-9-]+) x(\d+)", m.group(1))}
 
     def _find_po(self, supplier_code: str, total: int) -> dict[str, Any] | None:
         supplier = self.one("supplier", code=supplier_code)
@@ -708,6 +713,7 @@ class CrudRunner:
 
     def _p2p(
         self,
+        narrative: str,
         supplier: str,
         lines: list[dict[str, Any]],
         *,
@@ -724,7 +730,10 @@ class CrudRunner:
             self.notes.append(f"PurchaseOrder {po['number']} (existing)")
         po_lines = self.rows("purchase_order_line", po_id=po["id"])
         if not any(x["received_qty"] for x in po_lines):
-            self.receive(po, self._accepted_counts() or None)
+            counted = self._warehouse_count(narrative, po["number"])
+            if counted is None:
+                raise _Stop(f"Delivery for {po['number']} awaits the warehouse count.")
+            self.receive(po, counted)
             po_lines = self.rows("purchase_order_line", po_id=po["id"])
         invoices = [
             i for i in self.rows("supplier_invoice", po_id=po["id"]) if i["status"] != "reversed"
@@ -752,13 +761,16 @@ class CrudRunner:
     # ---- tasks -----------------------------------------------------------------------------
     def task_p2p_01_simple(self, n: str) -> None:
         self._p2p(
-            "ACME", [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}], reference="ACME-1001"
+            n,
+            "ACME",
+            [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
+            reference="ACME-1001",
         )
         self.finish("Ordered, received, invoiced and paid 10 VALVE-2IN from ACME.")
 
     def task_p2p_02_partial_receipt(self, n: str) -> None:
         self._p2p(
-            "BOLT", [{"sku": "FLANGE-4", "qty": 200, "unit_cost": "15.00"}], reference="BOLT-1"
+            n, "BOLT", [{"sku": "FLANGE-4", "qty": 200, "unit_cost": "15.00"}], reference="BOLT-1"
         )
         self.finish("Invoiced and paid the accepted quantity; the PO stays partially received.")
 
@@ -778,6 +790,7 @@ class CrudRunner:
 
     def task_p2p_06_price_variance_5pct(self, n: str) -> None:
         self._p2p(
+            n,
             "ACME",
             [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
             reference="ACME-V5",
@@ -787,6 +800,7 @@ class CrudRunner:
 
     def task_p2p_07_variance_within_tolerance(self, n: str) -> None:
         self._p2p(
+            n,
             "ACME",
             [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}],
             reference="ACME-V1",
@@ -800,12 +814,16 @@ class CrudRunner:
         ]
         if wrong:
             self.reverse_receipt(wrong[0], "goods never arrived")
-            po = self.call("get_row", table="purchase_order", id=wrong[0]["po_id"])["result"]
-            self.receive(po, {"HOSE-10M": 25})
+            raise _Stop("Reversed the wrong receipt; the real delivery awaits the warehouse count.")
+        po = self.one("purchase_order", status="approved")
+        counted = self._warehouse_count(n, po["number"])
+        if counted:
+            self.receive(po, counted)
         self.finish("Reversed the wrong receipt and recorded the real delivery of 25 HOSE-10M.")
 
     def task_p2p_09_partial_payment(self, n: str) -> None:
         self._p2p(
+            n,
             "ACME",
             [{"sku": "PUMP-SM", "qty": 10, "unit_cost": "400.00"}],
             reference="ACME-P9",
@@ -923,6 +941,7 @@ class CrudRunner:
 
     def task_dup_01_retry_storm(self, n: str) -> None:
         self._p2p(
+            n,
             "BOLT",
             [{"sku": "HOSE-10M", "qty": 20, "unit_cost": "25.00"}],
             reference="BOLT-20",

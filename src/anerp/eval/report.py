@@ -14,6 +14,7 @@ from typing import Any
 COLUMNS = [
     "server",
     "client",
+    "model",
     "task",
     "runs",
     "success_rate",
@@ -82,6 +83,7 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "server": server,
                 "client": client,
+                "model": next((i.get("model") for i in items if i.get("model")), None),
                 "task": task,
                 "runs": len(items),
                 "success_rate": _mean([x["success"] for x in m]),
@@ -136,12 +138,12 @@ def render_report(summary: list[dict[str, Any]], rows: list[dict[str, Any]]) -> 
     lines += [
         "## Headline (per server x client, averaged over tasks)",
         "",
-        "| server | client | tasks | success | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| server | client | model | tasks | success | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for (server, client), items in sorted(by_sc.items()):
         lines.append(
-            f"| {server} | {client} | {len(items)} | {_mean([i['success_rate'] for i in items])} | {_mean([i['unsafe_write_rate'] for i in items])} | {_mean([i['simulate_before_commit_rate'] for i in items])} | {_mean([i['duplicate_document_rate'] for i in items])} | {_mean([i['recovery_success_rate'] for i in items])} | {_mean([i['avg_tool_calls'] for i in items])} | {_mean([i['avg_wall_s'] for i in items])} | {_mean([i['tb_integrity'] for i in items])} |"
+            f"| {server} | {client} | {items[0].get('model') or '-'} | {len(items)} | {_mean([i['success_rate'] for i in items])} | {_mean([i['unsafe_write_rate'] for i in items])} | {_mean([i['simulate_before_commit_rate'] for i in items])} | {_mean([i['duplicate_document_rate'] for i in items])} | {_mean([i['recovery_success_rate'] for i in items])} | {_mean([i['avg_tool_calls'] for i in items])} | {_mean([i['avg_wall_s'] for i in items])} | {_mean([i['tb_integrity'] for i in items])} |"
         )
     lines += [
         "",

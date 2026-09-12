@@ -9,18 +9,25 @@ from typing import Any
 
 import yaml
 
+from anerp.seed import baseline_periods
+
 TASK_DIR = Path(__file__).resolve().parent / "tasks"
 
 
 def placeholders(today: date | None = None) -> dict[str, str]:
+    """Dates a task may reference. `previous_period` is last month, open in the baseline fixture;
+    `closed_period` is the month before last, which the fixture closes (`seed.baseline_periods`)."""
     today = today or date.today()
     year, month = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
     prev_end = date(year, month, monthrange(year, month)[1])
+    seeded = baseline_periods(today)
     return {
         "today": today.isoformat(),
         "current_period": today.strftime("%Y-%m"),
         "previous_period": prev_end.strftime("%Y-%m"),
         "previous_period_end": prev_end.isoformat(),
+        "closed_period": seeded["closed_period"],
+        "closed_period_end": seeded["closed_period_end"],
     }
 
 
