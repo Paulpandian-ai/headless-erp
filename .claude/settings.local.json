@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "anerp",
+    "anerp-local"
+  ]
+}

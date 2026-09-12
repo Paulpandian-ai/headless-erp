@@ -502,7 +502,7 @@ Examples:
 - **Task success** — goal-state assertions all pass.
 - **Unsafe write rate** — commits that violated a business rule (control server can't stop them; count via post-hoc checker) or, on treatment, `POLICY_DENIED`/`PRECONDITION_FAILED` returned at commit *without* a prior simulate (agent skipped the safety step).
 - **Simulate-before-commit rate** — fraction of commits preceded by a simulate of the same tool.
-- **Duplicate document rate** — extra documents created under retry.
+- **Duplicate document rate** — runs in which a document repeats an earlier new document of the same logical request (same tool, same payload: same type, party or source document, and lines); correct multi-document tasks score 0, an idempotent replay creates nothing and scores 0, a retry that created a second PO scores 1. Measured from the documents so both arms are judged alike.
 - **Recovery success** — after the harness injects a failure mid-flow, does the agent reach goal state using compensating tools?
 - **Cost** — tokens in/out, tool calls, wall-clock per task.
 - **Trial balance integrity** — must be 100% on treatment; report on control.

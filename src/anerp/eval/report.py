@@ -1,12 +1,14 @@
-"""summary.csv and report.md from raw.jsonl (plus an optional matplotlib plot)."""
+"""summary.csv, latency.csv and report.md from raw.jsonl (plus an optional matplotlib plot)."""
 
 from __future__ import annotations
 
 import contextlib
 import csv
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
+from statistics import mean, median
 from typing import Any
 
 COLUMNS = [
@@ -27,9 +29,45 @@ COLUMNS = [
 ]
 
 
+LATENCY_COLUMNS = ["server", "client", "tool", "calls", "median_ms", "p95_ms", "mean_ms", "max_ms"]
+
+
 def _mean(values: list[Any]) -> float | None:
     vals = [float(v) for v in values if v is not None]
     return round(sum(vals) / len(vals), 3) if vals else None
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Nearest-rank percentile of a non-empty list."""
+    ordered = sorted(values)
+    return ordered[max(math.ceil(pct / 100 * len(ordered)) - 1, 0)]
+
+
+def latency(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per-tool-call latency per server x client, overall (`tool` = "*") and per tool name.
+    Measured where the trace was taken: client-side for in-process clients, server-side for SDK
+    adapters (`runner._server_side_trace`), so both arms are measured the same way in one run."""
+    samples: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+    for r in rows:
+        for c in r["trace"]["tool_calls"]:
+            ms = float(c.get("latency_ms") or 0.0)
+            samples[(r["server"], r["client"], "*")].append(ms)
+            samples[(r["server"], r["client"], c["name"])].append(ms)
+    return [
+        {
+            "server": server,
+            "client": client,
+            "tool": tool,
+            "calls": len(vals),
+            "median_ms": round(median(vals), 1),
+            "p95_ms": round(_percentile(vals, 95), 1),
+            "mean_ms": round(mean(vals), 1),
+            "max_ms": round(max(vals), 1),
+        }
+        for (server, client, tool), vals in sorted(
+            samples.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2] != "*", kv[0][2])
+        )
+    ]
 
 
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -70,11 +108,16 @@ def write_outputs(run_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str]:
         w = csv.DictWriter(f, fieldnames=COLUMNS)
         w.writeheader()
         w.writerows(summary)
+    with (run_dir / "latency.csv").open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=LATENCY_COLUMNS)
+        w.writeheader()
+        w.writerows(latency(rows))
     (run_dir / "report.md").write_text(render_report(summary, rows))
     with contextlib.suppress(Exception):  # plots are optional (matplotlib extra)
         plot(run_dir, summary)
     return {
         "summary": str(run_dir / "summary.csv"),
+        "latency": str(run_dir / "latency.csv"),
         "report": str(run_dir / "report.md"),
         "raw": str(run_dir / "raw.jsonl"),
     }
@@ -111,6 +154,31 @@ def render_report(summary: list[dict[str, Any]], rows: list[dict[str, Any]]) -> 
         lines.append(
             f"| {s['server']} | {s['client']} | {s['task']} | {s['runs']} | {s['success_rate']} | {s['unsafe_write_rate']} | {s['simulate_before_commit_rate']} | {s['duplicate_document_rate']} | {s['avg_tool_calls']} | {s['avg_input_tokens']} | {s['avg_output_tokens']} | {s['avg_wall_s']} |"
         )
+    lines += ["", "## Tool-call latency (ms, per call)", ""]
+    lines += [
+        "| server | client | calls | median | p95 | mean | max |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for lat in latency(rows):
+        if lat["tool"] == "*":
+            lines.append(
+                f"| {lat['server']} | {lat['client']} | {lat['calls']} | {lat['median_ms']} | {lat['p95_ms']} | {lat['mean_ms']} | {lat['max_ms']} |"
+            )
+    lines += ["", "Per tool name in `latency.csv`.", ""]
+    servers = sorted({s["server"] for s in summary})
+    clients = sorted({s["client"] for s in summary})
+    calls_by = {(s["server"], s["client"], s["task"]): s["avg_tool_calls"] for s in summary}
+    for client in clients:
+        lines += [
+            f"## Tool calls per task ({client}, mean over runs)",
+            "",
+            "| task | " + " | ".join(servers) + " |",
+            "|---|" + "---|" * len(servers),
+        ]
+        for task in sorted({s["task"] for s in summary if s["client"] == client}):
+            cells = [str(calls_by.get((srv, client, task), "-")) for srv in servers]
+            lines.append(f"| {task} | " + " | ".join(cells) + " |")
+        lines.append("")
     failures = [r for r in rows if not r["metrics"]["success"]]
     if failures:
         lines += ["", "## Failed goal checks", ""]

@@ -34,7 +34,7 @@ class Environment:
     """Owns a fresh kernel per run.
 
     Local (the default, and the only configuration where treatment and control are comparable):
-    one database for both arms - `ANERP_EVAL_DATABASE_URL` (a local Postgres) or SQLite in memory -
+    one database for both arms - `ANERP_EVAL_DATABASE_URL` (any Postgres) or SQLite in memory -
     reset through the same `reset_and_seed` tool before every run, with both tool surfaces served
     from this process on loopback ports (`treatment_url`, `control_url`) for SDK clients.
 
@@ -108,7 +108,17 @@ class Environment:
                 seed_fixture(s, "baseline")
             return
         if self._engine is None:  # a persistent database: create the schema once, then reset
-            self._engine = db.make_engine(self.database_url)
+            engine = db.make_engine(self.database_url)
+            try:
+                with engine.connect():
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"eval database {self.backend} is not reachable ({type(exc).__name__}). "
+                    "Point ANERP_EVAL_DATABASE_URL at a running Postgres (src/anerp/eval/README.md "
+                    "lists three ways to get one) or unset it to use SQLite in memory."
+                ) from exc
+            self._engine = engine
             db.set_engine(self._engine)
             db.init_db(self._engine)
         self.admin_commit("reset_and_seed", {"fixture_name": "baseline", "confirm": "RESET"})

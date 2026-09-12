@@ -7,7 +7,8 @@ from pathlib import Path
 
 from anerp.eval.clients.scripted import ScriptedClient
 from anerp.eval.crud_server import crud_call, crud_tools
-from anerp.eval.report import load_raw, summarize
+from anerp.eval.metrics import duplicate_documents, snapshot
+from anerp.eval.report import latency, load_raw, summarize
 from anerp.eval.runner import Environment, run_matrix, run_one
 from anerp.eval.tasks_loader import load_tasks
 
@@ -32,8 +33,61 @@ def test_scripted_client_passes_every_task(tmp_path: Path) -> None:
             )
         assert m["tb_balanced"], task["id"]
         assert m["unsafe_writes"] == 0, task["id"]
+        assert m["duplicate_documents"] == 0, (task["id"], m["duplicate_detail"])
         assert m["simulate_before_commit_rate"] in (None, 1.0), task["id"]
     assert not failures, failures
+
+
+def test_duplicate_documents_counts_only_repeated_requests() -> None:
+    """A correct run that creates several different documents scores 0; the same request
+    committed again under a fresh idempotency key (a retry storm) scores 1; a replay of the
+    same key creates nothing and scores nothing."""
+    env = Environment()
+    env.reset()
+    before = snapshot(env.admin_query)
+    po = {"supplier": "ACME", "lines": [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}]}
+    env.admin_commit("create_purchase_order", po)
+    env.admin_commit(
+        "create_purchase_order",
+        {"supplier": "ACME", "lines": [{"sku": "VALVE-2IN", "qty": 3, "unit_cost": "50.00"}]},
+    )
+    env.admin_commit(
+        "create_sales_order", {"customer": "NORTH", "lines": [{"sku": "VALVE-2IN", "qty": 5}]}
+    )
+    env.admin_commit(
+        "post_journal_entry",
+        {
+            "memo": "rent",
+            "lines": [{"account": "5100", "debit": "1.00"}, {"account": "2000", "credit": "1.00"}],
+        },
+    )
+    assert duplicate_documents(env.admin_query, before) == []
+    second = env.admin_commit("create_purchase_order", po)  # a retry with a new key
+    assert duplicate_documents(env.admin_query, before) == [
+        f"PurchaseOrder {second['document']['number']}"
+    ]
+
+
+def test_scripted_client_on_control_surface() -> None:
+    """The CRUD oracle does its own bookkeeping: every task passes except the one the control
+    surface cannot express (no approval requests), and it never leaves the books unbalanced."""
+    env = Environment()
+    client = ScriptedClient()
+    failures = []
+    for task in load_tasks():
+        row = run_one(env, client, "control", task, 1)
+        m = row["metrics"]
+        assert m["tb_balanced"], task["id"]
+        assert m["unsafe_writes"] == 0, (task["id"], m["unsafe_detail"])
+        assert m["duplicate_documents"] == 0, (task["id"], m["duplicate_detail"])
+        assert m["tool_calls"] > 0 and row["trace"]["error"] is None, task["id"]
+        assert all(c["name"] in CRUD_TOOLS for c in row["trace"]["tool_calls"]), task["id"]
+        if not m["success"]:
+            failures.append((task["id"], [g["check"] for g in m["goal"] if not g["ok"]]))
+    assert failures == [("p2p_04_over_threshold", ["pending_approvals"])]
+
+
+CRUD_TOOLS = {"list_tables", "list_rows", "get_row", "insert_row", "update_row"}
 
 
 def test_control_surface_and_matrix_outputs(tmp_path: Path) -> None:
@@ -65,14 +119,24 @@ def test_control_surface_and_matrix_outputs(tmp_path: Path) -> None:
     assert crud_call("insert_row", {"table": "nope", "values": {}})["ok"] is False
     result = run_matrix(
         clients=["scripted"],
-        servers=["treatment"],
+        servers=["treatment", "control"],
         tasks=["p2p_01_simple", "dup_01_retry_storm"],
         runs=2,
         output_dir=str(tmp_path),
     )
-    assert result["runs"] == 4 and result["successes"] == 4
+    assert result["runs"] == 8 and result["successes"] == 8
     raw = load_raw(Path(result["raw"]))
     summary = summarize(raw)
-    assert summary[0]["success_rate"] == 1.0 and summary[0]["simulate_before_commit_rate"] == 1.0
-    assert (Path(result["report"])).read_text().startswith("# anerp evaluation report")
-    assert Path(result["summary"]).exists()
+    by_arm = {(s["server"], s["task"]): s for s in summary}
+    treat = by_arm[("treatment", "p2p_01_simple")]
+    assert treat["success_rate"] == 1.0 and treat["simulate_before_commit_rate"] == 1.0
+    assert by_arm[("control", "p2p_01_simple")]["avg_tool_calls"] > treat["avg_tool_calls"]
+    lat = {(row["server"], row["tool"]): row for row in latency(raw)}
+    for server in ("treatment", "control"):
+        assert lat[(server, "*")]["calls"] > 0
+        assert lat[(server, "*")]["median_ms"] <= lat[(server, "*")]["p95_ms"]
+    assert ("control", "insert_row") in lat and ("treatment", "create_purchase_order") in lat
+    report = Path(result["report"]).read_text()
+    assert report.startswith("# anerp evaluation report")
+    assert "## Tool-call latency" in report and "## Tool calls per task" in report
+    assert Path(result["summary"]).exists() and Path(result["latency"]).exists()
