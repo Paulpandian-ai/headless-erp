@@ -9,8 +9,8 @@
 # all 20 tasks, 3 runs. Override the model inputs to run a different tier. Pushing a tag named
 # eval-matrix-<anything> launches the default matrix with the tag as run id (for environments
 # whose token cannot dispatch workflows); `eval-matrix-<id>+<client>[+<client>]` restricts it to
-# those clients, and `~key=value` suffixes override servers, runs, tasks, step_factor and
-# step_factor_control (e.g. `eval-matrix-4+google_adk~servers=control~step_factor_control=5`).
+# those clients, and `,key=value` suffixes override servers, runs, tasks, step_factor and
+# step_factor_control (e.g. `eval-matrix-4+google_adk,servers=control,step_factor_control=5`).
 name: eval
 on:
   push:
@@ -77,7 +77,7 @@ jobs:
           clients = [c.strip() for c in os.environ["CLIENTS"].split(",") if c.strip()]
           ref = os.environ.get("GITHUB_REF_NAME", "")
           if os.environ.get("GITHUB_REF_TYPE") == "tag" and "+" in ref:
-              parts = ref.split("~")
+              parts = ref.split(",")
               clients = parts[0].split("+")[1:]
               for kv in parts[1:]:
                   k, _, v = kv.partition("=")
