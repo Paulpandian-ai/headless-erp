@@ -4,9 +4,13 @@
 # summary.csv, latency.csv and report.md over every row with `anerp eval-merge`.
 #
 # Defaults are the tier-matched cross-vendor comparison: each vendor's mid-tier model, both arms,
-# all 20 tasks, 3 runs. Override the model inputs to run a different tier.
+# all 20 tasks, 3 runs. Override the model inputs to run a different tier. Pushing a tag named
+# eval-matrix-<anything> launches the default matrix with the tag as run id (for environments
+# whose token cannot dispatch workflows).
 name: eval
 on:
+  push:
+    tags: ["eval-matrix-*"]
   workflow_dispatch:
     inputs:
       clients:
@@ -39,7 +43,14 @@ on:
         default: false
 
 env:
-  RUN_ID: ${{ inputs.run_id != '' && inputs.run_id || format('matrix-{0}', github.run_number) }}
+  RUN_ID: ${{ inputs.run_id || (github.ref_type == 'tag' && github.ref_name) || format('matrix-{0}', github.run_number) }}
+  CLIENTS: ${{ inputs.clients || 'claude_agent_sdk,openai_agents_sdk,google_adk' }}
+  SERVERS: ${{ inputs.servers || 'treatment,control' }}
+  RUNS: ${{ inputs.runs || '3' }}
+  TASKS: ${{ inputs.tasks || 'all' }}
+  ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-5' }}
+  OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.6-terra' }}
+  GOOGLE_MODEL: ${{ inputs.google_model || 'gemini-3.8-flash' }}
 
 jobs:
   plan:
@@ -51,8 +62,8 @@ jobs:
         shell: python
         run: |
           import json, os
-          clients = [c.strip() for c in "${{ inputs.clients }}".split(",") if c.strip()]
-          servers = [s.strip() for s in "${{ inputs.servers }}".split(",") if s.strip()]
+          clients = [c.strip() for c in os.environ["CLIENTS"].split(",") if c.strip()]
+          servers = [s.strip() for s in os.environ["SERVERS"].split(",") if s.strip()]
           include = [{"client": c, "server": s} for c in clients for s in servers]
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("matrix=" + json.dumps({"include": include}) + "\n")
@@ -86,14 +97,14 @@ jobs:
         run: >
           uv run --all-extras anerp eval
           --clients "${{ matrix.client }}" --servers "${{ matrix.server }}"
-          --runs "${{ inputs.runs }}" --tasks "${{ inputs.tasks }}"
+          --runs "${RUNS}" --tasks "${TASKS}"
           --output results --run-id "${RUN_ID}-${{ matrix.client }}-${{ matrix.server }}"
         env:
           ANERP_ENV: dev
           ANERP_EVAL_DATABASE_URL: postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval
-          ANERP_ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
-          ANERP_OPENAI_MODEL: ${{ inputs.openai_model }}
-          ANERP_GOOGLE_MODEL: ${{ inputs.google_model }}
+          ANERP_ANTHROPIC_MODEL: ${{ env.ANTHROPIC_MODEL }}
+          ANERP_OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
+          ANERP_GOOGLE_MODEL: ${{ env.GOOGLE_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -129,7 +140,7 @@ jobs:
           name: eval-results-${{ env.RUN_ID }}
           path: results/${{ env.RUN_ID }}/
       - name: Commit results
-        if: ${{ inputs.commit_results }}
+        if: ${{ inputs.commit_results && github.ref_type != 'tag' }}
         run: |
           git config user.name "anerp-eval"; git config user.email "eval@users.noreply.github.com"
           git add -f "results/${RUN_ID}/"{raw.jsonl,summary.csv,latency.csv,report.md}
