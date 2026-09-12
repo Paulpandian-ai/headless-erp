@@ -32,14 +32,87 @@ DOC_TYPES = (
 )
 
 
+REQUEST_TYPES = (
+    "PurchaseOrder",
+    "SalesOrder",
+    "SupplierInvoice",
+    "CustomerInvoice",
+    "JournalEntry",
+)
+"""Documents an agent creates with one logical request (the duplicate-document check)."""
+
+
 def snapshot(q: Query) -> dict[str, Any]:
     tb = q("get_trial_balance", {})
     inv = q("get_inventory", {})
+    pages = {t: q("search_documents", {"type": t, "limit": 500}) for t in DOC_TYPES}
     return {
         "balances": {row["code"]: row["net_cents"] for row in tb["accounts"]},
         "inventory": {row["sku"]: row["on_hand_qty"] for row in inv["items"]},
-        "counts": {t: q("search_documents", {"type": t, "limit": 500})["count"] for t in DOC_TYPES},
+        "counts": {t: page["count"] for t, page in pages.items()},
+        "ids": {t: {i["id"] for i in pages[t]["items"]} for t in REQUEST_TYPES},
     }
+
+
+def _request_fingerprint(type_: str, doc: dict[str, Any]) -> tuple[Any, ...] | None:
+    """What the same tool call with the same payload would produce: type, party or source
+    document, and the lines. None for documents that are not the product of one agent request
+    (journal entries the kernel posted behind another document)."""
+    lines: list[dict[str, Any]] = list(doc.get("lines") or [])
+    if type_ == "PurchaseOrder":
+        return (
+            doc["supplier_id"],
+            tuple(sorted((x["sku"], x["qty"], x["unit_cost_cents"]) for x in lines)),
+        )
+    if type_ == "SalesOrder":
+        return (
+            doc["customer_id"],
+            tuple(sorted((x["sku"], x["qty"], x["unit_price_cents"]) for x in lines)),
+        )
+    if type_ == "SupplierInvoice":
+        return (
+            doc["po_id"],
+            doc.get("supplier_reference"),
+            tuple(
+                sorted((x["sku"], x["invoice_qty"], x["invoice_unit_cost_cents"]) for x in lines)
+            ),
+        )
+    if type_ == "CustomerInvoice":
+        return (
+            doc["so_id"],
+            tuple(sorted((x["sku"], x["qty"], x["unit_price_cents"]) for x in lines)),
+        )
+    if type_ == "JournalEntry" and doc.get("source_type") == "ManualJournal":
+        return (
+            doc.get("memo"),
+            str(doc.get("posting_date")),
+            tuple((x["account"], x["debit_cents"], x["credit_cents"]) for x in lines),
+        )
+    return None
+
+
+def duplicate_documents(q: Query, before: dict[str, Any]) -> list[str]:
+    """Documents created during the run that repeat an earlier new document of the same logical
+    request (same tool, same payload: same type, party or source document, and lines). A correct
+    multi-document task scores 0; a retried request that created a second PO scores 1. Idempotent
+    replays create nothing and so never count. Measured from the documents, so both arms are
+    judged the same way whether the request went through the dispatcher or a raw insert."""
+    duplicates: list[str] = []
+    for type_ in REQUEST_TYPES:
+        new = [
+            i
+            for i in q("search_documents", {"type": type_, "limit": 500})["items"]
+            if i["id"] not in before.get("ids", {}).get(type_, set())
+        ]
+        seen: set[tuple[Any, ...]] = set()
+        for item in sorted(new, key=lambda i: (i.get("created_at") or "", i.get("number") or "")):
+            fp = _request_fingerprint(type_, q("get_document", {"id_or_number": item["id"]}))
+            if fp is None:
+                continue
+            if fp in seen:
+                duplicates.append(f"{type_} {item['number']}")
+            seen.add(fp)
+    return duplicates
 
 
 def _count(q: Query, type_: str, where: dict[str, Any]) -> int:
@@ -206,14 +279,7 @@ def run_metrics(
     wall_s: float,
 ) -> dict[str, Any]:
     goal = check_goal(q, task, before, trace)
-    after = snapshot(q)
-    head_types = ("PurchaseOrder", "SalesOrder", "SupplierInvoice", "CustomerInvoice")
-    extra_docs = sum(max(0, after["counts"][t] - before["counts"][t]) for t in head_types)
-    expected_docs = sum(
-        int(g["expected"])
-        for g in task["goal_state"]
-        if g["check"] == "count" and g["type"] in head_types
-    )
+    duplicates = duplicate_documents(q, before)
     control_problems = unsafe_writes_control(q) if server == "control" else []
     return {
         "success": all(g["ok"] for g in goal),
@@ -225,7 +291,8 @@ def run_metrics(
         "simulate_before_commit_rate": simulate_before_commit_rate(trace)
         if server == "treatment"
         else None,
-        "duplicate_documents": max(0, extra_docs - expected_docs) if expected_docs else 0,
+        "duplicate_documents": len(duplicates),
+        "duplicate_detail": duplicates,
         "recovery_task": "recovery" in task.get("traps", []),
         "tool_calls": len(trace.tool_calls),
         "input_tokens": trace.input_tokens,

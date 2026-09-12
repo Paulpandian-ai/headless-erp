@@ -86,11 +86,21 @@ If the database is down the harness stops before the first run with a message po
 
 `--clients scripted --servers treatment,control` runs the deterministic oracle on both surfaces:
 on treatment it follows simulate-then-commit; on control (`clients/scripted_crud.py`) it is the
-best-case CRUD agent, doing every journal entry, open item, stock and status update itself with
-`insert_row`/`update_row`. No model is called, so it gives a floor for tool calls per task and a
+best-case CRUD agent. No model is called, so it gives a floor for tool calls per task and a
 per-call latency comparison of the two surfaces on the same kernel; `report.md` and
 `latency.csv` carry the median/p95 per arm and the per-task call counts. It is not an LLM result
 and does not go in the paper's matrix.
+
+**Read the control oracle's 19/20 as a ceiling, not a typical result.** The CRUD surface offers
+nothing but row access, so the oracle hand-implements the kernel's bookkeeping and policies in
+the script itself: document numbering, every journal entry and its lines, open items, stock
+movements, line quantities and statuses, the approval threshold, the price tolerance, the credit
+limit, the stock check and the closed-period check. It never mistypes a column, never forgets
+the GR/IR side of a receipt, never posts into a closed period, and knows the warehouse's count
+in advance. An LLM agent on the same surface has to discover all of that from column names and
+gets none of it enforced; the paper's control numbers come from those agents, not from this
+script. The one task it cannot pass (`p2p_04`) fails because the CRUD surface has no approval
+request to raise, not because the script got it wrong.
 
 ## google-adk
 

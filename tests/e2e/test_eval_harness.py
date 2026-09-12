@@ -7,6 +7,7 @@ from pathlib import Path
 
 from anerp.eval.clients.scripted import ScriptedClient
 from anerp.eval.crud_server import crud_call, crud_tools
+from anerp.eval.metrics import duplicate_documents, snapshot
 from anerp.eval.report import latency, load_raw, summarize
 from anerp.eval.runner import Environment, run_matrix, run_one
 from anerp.eval.tasks_loader import load_tasks
@@ -32,8 +33,39 @@ def test_scripted_client_passes_every_task(tmp_path: Path) -> None:
             )
         assert m["tb_balanced"], task["id"]
         assert m["unsafe_writes"] == 0, task["id"]
+        assert m["duplicate_documents"] == 0, (task["id"], m["duplicate_detail"])
         assert m["simulate_before_commit_rate"] in (None, 1.0), task["id"]
     assert not failures, failures
+
+
+def test_duplicate_documents_counts_only_repeated_requests() -> None:
+    """A correct run that creates several different documents scores 0; the same request
+    committed again under a fresh idempotency key (a retry storm) scores 1; a replay of the
+    same key creates nothing and scores nothing."""
+    env = Environment()
+    env.reset()
+    before = snapshot(env.admin_query)
+    po = {"supplier": "ACME", "lines": [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}]}
+    env.admin_commit("create_purchase_order", po)
+    env.admin_commit(
+        "create_purchase_order",
+        {"supplier": "ACME", "lines": [{"sku": "VALVE-2IN", "qty": 3, "unit_cost": "50.00"}]},
+    )
+    env.admin_commit(
+        "create_sales_order", {"customer": "NORTH", "lines": [{"sku": "VALVE-2IN", "qty": 5}]}
+    )
+    env.admin_commit(
+        "post_journal_entry",
+        {
+            "memo": "rent",
+            "lines": [{"account": "5100", "debit": "1.00"}, {"account": "2000", "credit": "1.00"}],
+        },
+    )
+    assert duplicate_documents(env.admin_query, before) == []
+    second = env.admin_commit("create_purchase_order", po)  # a retry with a new key
+    assert duplicate_documents(env.admin_query, before) == [
+        f"PurchaseOrder {second['document']['number']}"
+    ]
 
 
 def test_scripted_client_on_control_surface() -> None:
@@ -47,6 +79,7 @@ def test_scripted_client_on_control_surface() -> None:
         m = row["metrics"]
         assert m["tb_balanced"], task["id"]
         assert m["unsafe_writes"] == 0, (task["id"], m["unsafe_detail"])
+        assert m["duplicate_documents"] == 0, (task["id"], m["duplicate_detail"])
         assert m["tool_calls"] > 0 and row["trace"]["error"] is None, task["id"]
         assert all(c["name"] in CRUD_TOOLS for c in row["trace"]["tool_calls"]), task["id"]
         if not m["success"]:
