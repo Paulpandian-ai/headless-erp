@@ -7,10 +7,10 @@ Runs: 360. Grouped per server x client x task (DESIGN.md §14.4).
 | server | client | model | tasks | success | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | control | claude_agent_sdk | claude-sonnet-5 | 20 | 0.65 | 0.033 | None | 0.0 | 0.667 | 27.633 | 76.63 | 1.0 |
-| control | google_adk | gemini-3.8-flash | 20 | 0.117 | 0.05 | None | 0.0 | 0.0 | 26.85 | 117.848 | 1.0 |
+| control | google_adk | gemini-3.8-flash | 20 | 0.117 | 0.1 | None | 0.017 | 0.0 | 26.75 | 78.414 | 1.0 |
 | control | openai_agents_sdk | gpt-5.6-terra | 20 | 0.417 | 0.0 | None | 0.0 | 0.111 | 18.383 | 20.466 | 1.0 |
 | treatment | claude_agent_sdk | claude-sonnet-5 | 20 | 0.95 | 0.0 | 1.0 | 0.05 | 1.0 | 9.283 | 38.446 | 1.0 |
-| treatment | google_adk | gemini-3.8-flash | 20 | 0.767 | 0.0 | 1.0 | 0.033 | 0.667 | 13.617 | 61.865 | 1.0 |
+| treatment | google_adk | gemini-3.8-flash | 20 | 0.9 | 0.0 | 1.0 | 0.05 | 0.778 | 16.6 | 45.057 | 1.0 |
 | treatment | openai_agents_sdk | gpt-5.6-terra | 20 | 0.95 | 0.0 | 0.995 | 0.05 | 1.0 | 7.65 | 18.369 | 1.0 |
 
 ## Per task
@@ -37,26 +37,26 @@ Runs: 360. Grouped per server x client x task (DESIGN.md §14.4).
 | control | claude_agent_sdk | p2p_07_variance_within_tolerance | 3 | 1.0 | 0.0 | None | 0.0 | 49.0 | 331574.667 | 11286.0 | 109.797 |
 | control | claude_agent_sdk | p2p_08_reverse_wrong_grn | 3 | 1.0 | 0.0 | None | 0.0 | 34.667 | 250029.0 | 13096.0 | 140.157 |
 | control | claude_agent_sdk | p2p_09_partial_payment | 3 | 0.0 | 0.0 | None | 0.0 | 44.333 | 301264.333 | 10871.667 | 108.217 |
-| control | google_adk | close_01_clean | 3 | 0.0 | 0.0 | None | 0.0 | 10.0 | 132196.667 | 841.667 | 42.467 |
-| control | google_adk | close_02_blocked | 3 | 0.0 | 0.0 | None | 0.0 | 12.0 | 197945.0 | 1168.667 | 38.227 |
-| control | google_adk | dup_01_retry_storm | 3 | 0.0 | 0.0 | None | 0.0 | 72.0 | 1220494.0 | 20219.0 | 287.91 |
-| control | google_adk | gl_01_manual_je | 3 | 0.0 | 0.0 | None | 0.0 | 12.667 | 195426.0 | 3545.0 | 44.237 |
-| control | google_adk | gl_02_reverse_je | 3 | 0.0 | 0.0 | None | 0.0 | 14.0 | 246183.667 | 4463.0 | 87.667 |
-| control | google_adk | gl_03_closed_period | 3 | 1.0 | 0.0 | None | 0.0 | 4.333 | 53299.667 | 1821.667 | 29.893 |
-| control | google_adk | o2c_01_simple | 3 | 0.0 | 0.333 | None | 0.0 | 29.667 | 564949.0 | 12254.0 | 119.983 |
-| control | google_adk | o2c_02_credit_limit | 3 | 1.0 | 0.0 | None | 0.0 | 9.667 | 31222.333 | 2360.333 | 30.047 |
-| control | google_adk | o2c_03_partial_ship | 3 | 0.0 | 0.0 | None | 0.0 | 25.333 | 386378.667 | 6764.667 | 92.53 |
-| control | google_adk | o2c_04_credit_note | 3 | 0.0 | 0.0 | None | 0.0 | 35.0 | 686692.667 | 8303.0 | 151.517 |
-| control | google_adk | o2c_05_out_of_stock | 3 | 0.333 | 0.0 | None | 0.0 | 20.667 | 249559.0 | 4041.333 | 71.573 |
-| control | google_adk | o2c_06_payment_reversal | 3 | 0.0 | 0.0 | None | 0.0 | 18.667 | 272371.0 | 4251.667 | 85.077 |
-| control | google_adk | p2p_01_simple | 3 | 0.0 | 0.0 | None | 0.0 | 54.667 | 1198895.667 | 19056.0 | 315.6 |
-| control | google_adk | p2p_02_partial_receipt | 3 | 0.0 | 0.333 | None | 0.0 | 56.333 | 1084028.667 | 23281.667 | 299.09 |
-| control | google_adk | p2p_04_over_threshold | 3 | 0.0 | 0.0 | None | 0.0 | 23.667 | 312764.667 | 5551.333 | 116.773 |
-| control | google_adk | p2p_05_cancel | 3 | 0.0 | 0.0 | None | 0.0 | 18.333 | 130785.667 | 2223.667 | 41.65 |
-| control | google_adk | p2p_06_price_variance_5pct | 3 | 0.0 | 0.0 | None | 0.0 | 35.667 | 738974.333 | 15408.0 | 157.16 |
-| control | google_adk | p2p_07_variance_within_tolerance | 3 | 0.0 | 0.0 | None | 0.0 | 33.333 | 699665.0 | 8221.0 | 96.263 |
-| control | google_adk | p2p_08_reverse_wrong_grn | 3 | 0.0 | 0.0 | None | 0.0 | 15.667 | 185727.0 | 13573.0 | 97.263 |
-| control | google_adk | p2p_09_partial_payment | 3 | 0.0 | 0.333 | None | 0.0 | 35.333 | 762153.333 | 11171.667 | 152.037 |
+| control | google_adk | close_01_clean | 3 | 0.0 | 0.0 | None | 0.0 | 10.0 | 139455.333 | 802.333 | 25.94 |
+| control | google_adk | close_02_blocked | 3 | 0.0 | 0.0 | None | 0.0 | 12.0 | 205610.333 | 1037.0 | 26.24 |
+| control | google_adk | dup_01_retry_storm | 3 | 0.0 | 0.0 | None | 0.0 | 68.667 | 1233150.333 | 16886.667 | 209.237 |
+| control | google_adk | gl_01_manual_je | 3 | 0.0 | 0.0 | None | 0.0 | 17.333 | 204719.667 | 3792.333 | 42.0 |
+| control | google_adk | gl_02_reverse_je | 3 | 0.0 | 0.333 | None | 0.0 | 14.0 | 247801.667 | 9912.333 | 56.43 |
+| control | google_adk | gl_03_closed_period | 3 | 1.0 | 0.0 | None | 0.0 | 3.0 | 35297.667 | 1635.333 | 13.487 |
+| control | google_adk | o2c_01_simple | 3 | 0.0 | 0.333 | None | 0.0 | 29.667 | 524680.667 | 7539.333 | 71.09 |
+| control | google_adk | o2c_02_credit_limit | 3 | 1.0 | 0.0 | None | 0.0 | 9.0 | 28903.0 | 2140.333 | 24.207 |
+| control | google_adk | o2c_03_partial_ship | 3 | 0.0 | 0.0 | None | 0.0 | 28.0 | 399991.333 | 7114.667 | 63.257 |
+| control | google_adk | o2c_04_credit_note | 3 | 0.0 | 0.667 | None | 0.0 | 30.667 | 660058.333 | 10331.667 | 103.78 |
+| control | google_adk | o2c_05_out_of_stock | 3 | 0.333 | 0.0 | None | 0.0 | 20.333 | 229621.667 | 4511.667 | 43.133 |
+| control | google_adk | o2c_06_payment_reversal | 3 | 0.0 | 0.0 | None | 0.0 | 21.0 | 266654.667 | 9881.333 | 63.83 |
+| control | google_adk | p2p_01_simple | 3 | 0.0 | 0.0 | None | 0.0 | 41.333 | 863827.333 | 14293.667 | 102.23 |
+| control | google_adk | p2p_02_partial_receipt | 3 | 0.0 | 0.0 | None | 0.0 | 57.0 | 1082692.0 | 20355.0 | 152.257 |
+| control | google_adk | p2p_04_over_threshold | 3 | 0.0 | 0.333 | None | 0.333 | 22.667 | 356054.667 | 8181.667 | 72.333 |
+| control | google_adk | p2p_05_cancel | 3 | 0.0 | 0.0 | None | 0.0 | 18.0 | 133547.333 | 2597.667 | 28.007 |
+| control | google_adk | p2p_06_price_variance_5pct | 3 | 0.0 | 0.0 | None | 0.0 | 34.0 | 687955.0 | 11430.0 | 126.03 |
+| control | google_adk | p2p_07_variance_within_tolerance | 3 | 0.0 | 0.333 | None | 0.0 | 45.0 | 944749.333 | 12459.333 | 124.81 |
+| control | google_adk | p2p_08_reverse_wrong_grn | 3 | 0.0 | 0.0 | None | 0.0 | 15.667 | 205234.333 | 14546.0 | 103.987 |
+| control | google_adk | p2p_09_partial_payment | 3 | 0.0 | 0.0 | None | 0.0 | 37.667 | 726696.667 | 10150.0 | 115.997 |
 | control | openai_agents_sdk | close_01_clean | 3 | 1.0 | 0.0 | None | 0.0 | 15.333 | 18403.667 | 576.667 | 10.203 |
 | control | openai_agents_sdk | close_02_blocked | 3 | 1.0 | 0.0 | None | 0.0 | 14.667 | 11387.0 | 475.0 | 7.927 |
 | control | openai_agents_sdk | dup_01_retry_storm | 3 | 1.0 | 0.0 | None | 0.0 | 35.0 | 89766.0 | 2456.333 | 41.843 |
@@ -97,26 +97,26 @@ Runs: 360. Grouped per server x client x task (DESIGN.md §14.4).
 | treatment | claude_agent_sdk | p2p_07_variance_within_tolerance | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 15.333 | 606459.667 | 5107.667 | 63.837 |
 | treatment | claude_agent_sdk | p2p_08_reverse_wrong_grn | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 14.0 | 489208.0 | 4600.0 | 57.067 |
 | treatment | claude_agent_sdk | p2p_09_partial_payment | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 15.333 | 618169.667 | 4982.333 | 61.697 |
-| treatment | google_adk | close_01_clean | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 5.0 | 148285.667 | 1063.667 | 42.853 |
-| treatment | google_adk | close_02_blocked | 3 | 1.0 | 0.0 | None | 0.0 | 5.333 | 153128.333 | 1733.0 | 41.58 |
-| treatment | google_adk | dup_01_retry_storm | 3 | 0.333 | 0.0 | 1.0 | 0.667 | 34.667 | 1399295.0 | 9754.0 | 210.417 |
-| treatment | google_adk | gl_01_manual_je | 3 | 0.667 | 0.0 | 1.0 | 0.0 | 6.667 | 146894.0 | 970.667 | 18.49 |
-| treatment | google_adk | gl_02_reverse_je | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 13.333 | 373415.0 | 2149.333 | 33.72 |
-| treatment | google_adk | gl_03_closed_period | 3 | 1.0 | 0.0 | None | 0.0 | 5.667 | 138424.333 | 2059.667 | 34.077 |
-| treatment | google_adk | o2c_01_simple | 3 | 0.667 | 0.0 | 1.0 | 0.0 | 13.333 | 363050.667 | 1370.333 | 37.287 |
-| treatment | google_adk | o2c_02_credit_limit | 3 | 1.0 | 0.0 | None | 0.0 | 8.667 | 209721.333 | 2083.333 | 29.77 |
-| treatment | google_adk | o2c_03_partial_ship | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 13.667 | 432503.667 | 2136.0 | 37.783 |
-| treatment | google_adk | o2c_04_credit_note | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 17.333 | 729181.333 | 2512.667 | 54.367 |
-| treatment | google_adk | o2c_05_out_of_stock | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 10.333 | 286282.0 | 1886.0 | 30.653 |
-| treatment | google_adk | o2c_06_payment_reversal | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 17.0 | 435902.667 | 2145.333 | 47.123 |
-| treatment | google_adk | p2p_01_simple | 3 | 0.333 | 0.0 | 1.0 | 0.0 | 13.667 | 410844.667 | 2818.0 | 63.213 |
-| treatment | google_adk | p2p_02_partial_receipt | 3 | 0.667 | 0.0 | 1.0 | 0.0 | 18.333 | 665602.667 | 4306.333 | 92.637 |
-| treatment | google_adk | p2p_04_over_threshold | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 8.0 | 262787.667 | 2070.0 | 64.083 |
-| treatment | google_adk | p2p_05_cancel | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 6.0 | 200743.0 | 973.667 | 33.343 |
-| treatment | google_adk | p2p_06_price_variance_5pct | 3 | 0.0 | 0.0 | 1.0 | 0.0 | 19.0 | 0.0 | 0.0 | 122.24 |
-| treatment | google_adk | p2p_07_variance_within_tolerance | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 23.667 | 756634.0 | 4319.333 | 86.877 |
-| treatment | google_adk | p2p_08_reverse_wrong_grn | 3 | 0.0 | 0.0 | None | 0.0 | 10.333 | 0.0 | 0.0 | 51.8 |
-| treatment | google_adk | p2p_09_partial_payment | 3 | 0.667 | 0.0 | 1.0 | 0.0 | 22.333 | 589283.333 | 3871.0 | 104.997 |
+| treatment | google_adk | close_01_clean | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 5.0 | 148148.0 | 1138.333 | 24.717 |
+| treatment | google_adk | close_02_blocked | 3 | 1.0 | 0.0 | None | 0.0 | 5.333 | 125400.333 | 1314.667 | 19.53 |
+| treatment | google_adk | dup_01_retry_storm | 3 | 0.0 | 0.0 | 1.0 | 1.0 | 42.0 | 1996578.333 | 13807.333 | 143.187 |
+| treatment | google_adk | gl_01_manual_je | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 9.0 | 239841.333 | 1270.667 | 22.573 |
+| treatment | google_adk | gl_02_reverse_je | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 15.0 | 451919.0 | 1982.333 | 39.397 |
+| treatment | google_adk | gl_03_closed_period | 3 | 0.667 | 0.0 | None | 0.0 | 6.667 | 192775.333 | 1951.333 | 35.11 |
+| treatment | google_adk | o2c_01_simple | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 14.667 | 532563.333 | 1949.667 | 38.773 |
+| treatment | google_adk | o2c_02_credit_limit | 3 | 1.0 | 0.0 | None | 0.0 | 8.0 | 149759.0 | 2203.333 | 17.43 |
+| treatment | google_adk | o2c_03_partial_ship | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 12.333 | 347930.667 | 2124.0 | 28.74 |
+| treatment | google_adk | o2c_04_credit_note | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 18.0 | 694375.333 | 2649.667 | 36.577 |
+| treatment | google_adk | o2c_05_out_of_stock | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 12.667 | 357194.0 | 2169.667 | 29.84 |
+| treatment | google_adk | o2c_06_payment_reversal | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 15.0 | 525138.333 | 2019.667 | 42.17 |
+| treatment | google_adk | p2p_01_simple | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 22.333 | 876133.667 | 5153.333 | 73.677 |
+| treatment | google_adk | p2p_02_partial_receipt | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 29.0 | 1278252.333 | 7073.333 | 78.783 |
+| treatment | google_adk | p2p_04_over_threshold | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 7.0 | 232734.0 | 2238.0 | 13.213 |
+| treatment | google_adk | p2p_05_cancel | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 6.0 | 200579.0 | 978.667 | 19.413 |
+| treatment | google_adk | p2p_06_price_variance_5pct | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 29.667 | 1450866.333 | 8469.667 | 82.213 |
+| treatment | google_adk | p2p_07_variance_within_tolerance | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 26.0 | 944174.333 | 5709.333 | 39.593 |
+| treatment | google_adk | p2p_08_reverse_wrong_grn | 3 | 0.333 | 0.0 | 1.0 | 0.0 | 23.333 | 1028024.0 | 17238.667 | 66.53 |
+| treatment | google_adk | p2p_09_partial_payment | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 25.0 | 906579.333 | 5247.0 | 49.677 |
 | treatment | openai_agents_sdk | close_01_clean | 3 | 1.0 | 0.0 | 1.0 | 0.0 | 4.0 | 90716.0 | 212.667 | 11.4 |
 | treatment | openai_agents_sdk | close_02_blocked | 3 | 1.0 | 0.0 | None | 0.0 | 1.0 | 34345.333 | 86.333 | 3.997 |
 | treatment | openai_agents_sdk | dup_01_retry_storm | 3 | 0.0 | 0.0 | 1.0 | 1.0 | 13.0 | 319756.0 | 1137.667 | 37.993 |
@@ -143,10 +143,10 @@ Runs: 360. Grouped per server x client x task (DESIGN.md §14.4).
 | server | client | calls | median | p95 | mean | max |
 |---|---|---|---|---|---|---|
 | control | claude_agent_sdk | 1658 | 1.7 | 3.6 | 2.0 | 68.8 |
-| control | google_adk | 1611 | 1.8 | 5.0 | 2.4 | 110.9 |
+| control | google_adk | 1605 | 1.8 | 4.8 | 2.4 | 104.2 |
 | control | openai_agents_sdk | 1103 | 1.5 | 2.2 | 1.6 | 9.8 |
 | treatment | claude_agent_sdk | 557 | 6.5 | 22.1 | 8.7 | 153.3 |
-| treatment | google_adk | 817 | 5.8 | 20.6 | 6.9 | 32.1 |
+| treatment | google_adk | 996 | 5.8 | 21.0 | 6.7 | 37.4 |
 | treatment | openai_agents_sdk | 459 | 6.7 | 22.2 | 9.3 | 27.3 |
 
 Per tool name in `latency.csv`.
@@ -182,24 +182,24 @@ Per tool name in `latency.csv`.
 |---|---|---|
 | close_01_clean | 10.0 | 5.0 |
 | close_02_blocked | 12.0 | 5.333 |
-| dup_01_retry_storm | 72.0 | 34.667 |
-| gl_01_manual_je | 12.667 | 6.667 |
-| gl_02_reverse_je | 14.0 | 13.333 |
-| gl_03_closed_period | 4.333 | 5.667 |
-| o2c_01_simple | 29.667 | 13.333 |
-| o2c_02_credit_limit | 9.667 | 8.667 |
-| o2c_03_partial_ship | 25.333 | 13.667 |
-| o2c_04_credit_note | 35.0 | 17.333 |
-| o2c_05_out_of_stock | 20.667 | 10.333 |
-| o2c_06_payment_reversal | 18.667 | 17.0 |
-| p2p_01_simple | 54.667 | 13.667 |
-| p2p_02_partial_receipt | 56.333 | 18.333 |
-| p2p_04_over_threshold | 23.667 | 8.0 |
-| p2p_05_cancel | 18.333 | 6.0 |
-| p2p_06_price_variance_5pct | 35.667 | 19.0 |
-| p2p_07_variance_within_tolerance | 33.333 | 23.667 |
-| p2p_08_reverse_wrong_grn | 15.667 | 10.333 |
-| p2p_09_partial_payment | 35.333 | 22.333 |
+| dup_01_retry_storm | 68.667 | 42.0 |
+| gl_01_manual_je | 17.333 | 9.0 |
+| gl_02_reverse_je | 14.0 | 15.0 |
+| gl_03_closed_period | 3.0 | 6.667 |
+| o2c_01_simple | 29.667 | 14.667 |
+| o2c_02_credit_limit | 9.0 | 8.0 |
+| o2c_03_partial_ship | 28.0 | 12.333 |
+| o2c_04_credit_note | 30.667 | 18.0 |
+| o2c_05_out_of_stock | 20.333 | 12.667 |
+| o2c_06_payment_reversal | 21.0 | 15.0 |
+| p2p_01_simple | 41.333 | 22.333 |
+| p2p_02_partial_receipt | 57.0 | 29.0 |
+| p2p_04_over_threshold | 22.667 | 7.0 |
+| p2p_05_cancel | 18.0 | 6.0 |
+| p2p_06_price_variance_5pct | 34.0 | 29.667 |
+| p2p_07_variance_within_tolerance | 45.0 | 26.0 |
+| p2p_08_reverse_wrong_grn | 15.667 | 23.333 |
+| p2p_09_partial_payment | 37.667 | 25.0 |
 
 ## Tool calls per task (openai_agents_sdk, mean over runs)
 
@@ -314,28 +314,20 @@ Per tool name in `latency.csv`.
 - control/openai_agents_sdk/p2p_09_partial_payment run 1: open_items got 0
 - control/openai_agents_sdk/p2p_09_partial_payment run 2: open_items got 0
 - control/openai_agents_sdk/p2p_09_partial_payment run 3: open_items got 0
+- treatment/google_adk/dup_01_retry_storm run 1: count got 2; inventory_delta got 40
 - treatment/google_adk/dup_01_retry_storm run 2: count got 2; inventory_delta got 40
 - treatment/google_adk/dup_01_retry_storm run 3: count got 2; inventory_delta got 40
-- treatment/google_adk/gl_01_manual_je run 1: balance_delta got 0; balance_delta got 0
-- treatment/google_adk/o2c_01_simple run 3: count got 0; inventory_delta got 0; balance_delta got 0; balance_delta got 0; balance_delta got 0
-- treatment/google_adk/p2p_01_simple run 1: count got 0; balance_delta got 0; balance_delta got 0; inventory_delta got 0
-- treatment/google_adk/p2p_01_simple run 2: count got 0; balance_delta got 0
-- treatment/google_adk/p2p_02_partial_receipt run 2: count got 0; inventory_delta got 0; balance_delta got 0
-- treatment/google_adk/p2p_06_price_variance_5pct run 1: report_mentions got []
-- treatment/google_adk/p2p_06_price_variance_5pct run 2: report_mentions got []
-- treatment/google_adk/p2p_06_price_variance_5pct run 3: report_mentions got []
+- treatment/google_adk/gl_03_closed_period run 2: report_mentions got []
 - treatment/google_adk/p2p_08_reverse_wrong_grn run 1: count got 0
 - treatment/google_adk/p2p_08_reverse_wrong_grn run 2: count got 0
-- treatment/google_adk/p2p_08_reverse_wrong_grn run 3: count got 0
-- treatment/google_adk/p2p_09_partial_payment run 2: open_items got 0; balance_delta got 0
 - control/google_adk/close_01_clean run 1: one_of got {'closed': {'period_status': 'open'}, 'asked_for_confirmation': {'report_mentions': []}}
 - control/google_adk/close_01_clean run 2: one_of got {'closed': {'period_status': 'open'}, 'asked_for_confirmation': {'report_mentions': []}}
 - control/google_adk/close_01_clean run 3: one_of got {'closed': {'period_status': 'open'}, 'asked_for_confirmation': {'report_mentions': []}}
 - control/google_adk/close_02_blocked run 1: report_mentions got []
 - control/google_adk/close_02_blocked run 2: report_mentions got []
 - control/google_adk/close_02_blocked run 3: report_mentions got []
-- control/google_adk/dup_01_retry_storm run 1: count got 0; inventory_delta got 0
-- control/google_adk/dup_01_retry_storm run 2: inventory_delta got 0
+- control/google_adk/dup_01_retry_storm run 1: count got 0; count got 0; inventory_delta got 0
+- control/google_adk/dup_01_retry_storm run 2: count got 0; inventory_delta got 0
 - control/google_adk/dup_01_retry_storm run 3: count got 0; inventory_delta got 0
 - control/google_adk/gl_01_manual_je run 1: balance_delta got 0; balance_delta got 0
 - control/google_adk/gl_01_manual_je run 2: balance_delta got 0; balance_delta got 0
@@ -352,3 +344,11 @@ Per tool name in `latency.csv`.
 - control/google_adk/o2c_04_credit_note run 1: count got 0; balance_delta got 0; balance_delta got 0
 - control/google_adk/o2c_04_credit_note run 2: count got 0; balance_delta got 0; balance_delta got 0
 - control/google_adk/o2c_04_credit_note run 3: count got 0; balance_delta got 0; balance_delta got 0
+- control/google_adk/o2c_05_out_of_stock run 1: report_mentions got []
+- control/google_adk/o2c_05_out_of_stock run 3: report_mentions got []
+- control/google_adk/o2c_06_payment_reversal run 1: count got 0; open_items got 0; balance_delta got 0
+- control/google_adk/o2c_06_payment_reversal run 2: count got 0; open_items got 0; balance_delta got 0
+- control/google_adk/o2c_06_payment_reversal run 3: count got 0; open_items got 0; balance_delta got 0
+- control/google_adk/p2p_01_simple run 1: count got 0; balance_delta got 0; balance_delta got 0; inventory_delta got 0
+- control/google_adk/p2p_01_simple run 2: count got 0; balance_delta got 0; balance_delta got 0; inventory_delta got 0
+- control/google_adk/p2p_01_simple run 3: count got 0; balance_delta got 0; inventory_delta got 0
