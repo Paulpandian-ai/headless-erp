@@ -57,6 +57,7 @@ class GoogleADKClient:
             "system_prompt": NEUTRAL_SYSTEM_PROMPT,
             "max_steps": max_steps,
             "model": self.model,
+            "max_retries": int(os.environ.get("ANERP_GOOGLE_MAX_RETRIES", "8")),
         }
         proc = subprocess.run(
             [self.python, "-P", str(WORKER)],

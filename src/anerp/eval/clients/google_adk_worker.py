@@ -18,6 +18,7 @@ async def run(job: dict[str, Any]) -> dict[str, Any]:
     from google.adk.agents import LlmAgent
     from google.adk.agents.invocation_context import LlmCallsLimitExceededError
     from google.adk.agents.run_config import RunConfig
+    from google.adk.models.google_llm import Gemini
     from google.adk.runners import InMemoryRunner
     from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
     from google.genai import types
@@ -39,9 +40,22 @@ async def run(job: dict[str, Any]) -> dict[str, Any]:
             sse_read_timeout=120,
         )
     )
+    # Gemini returns 503 UNAVAILABLE ("high demand") and 429 for minutes at a time; without
+    # retries most of a matrix dies on the first call. Exponential backoff up to a minute.
+    model = Gemini(
+        model=job["model"],
+        retry_options=types.HttpRetryOptions(
+            attempts=int(job.get("max_retries", 8)),
+            initial_delay=2.0,
+            max_delay=60.0,
+            exp_base=2.0,
+            jitter=0.5,
+            http_status_codes=[408, 429, 500, 502, 503, 504],
+        ),
+    )
     agent = LlmAgent(
         name="ops_assistant",
-        model=job["model"],
+        model=model,
         instruction=job["system_prompt"],
         tools=[toolset],
     )

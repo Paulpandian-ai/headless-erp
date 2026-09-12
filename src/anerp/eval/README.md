@@ -119,7 +119,9 @@ before an irreversible-looking step is not wrong.
 If the database is down the harness stops before the first run with a message pointing here.
 A run whose client died on a vendor rate limit is repeated from a fresh kernel after a pause
 (`ANERP_EVAL_RUN_RETRIES`, default 2); the row records `attempts`. The OpenAI adapter also
-raises its client's retries (`ANERP_OPENAI_MAX_RETRIES`, default 10), honouring `retry-after`.
+raises its client's retries (`ANERP_OPENAI_MAX_RETRIES`, default 10, honouring `retry-after`)
+and the ADK worker retries 429/5xx with exponential backoff (`ANERP_GOOGLE_MAX_RETRIES`,
+default 8) - Gemini answers 503 "high demand" for minutes at a time.
 
 ### Model-free run on both arms
 
