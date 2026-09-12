@@ -158,16 +158,33 @@ def _filter_key(g: dict[str, Any]) -> str:
     return f"{g['type']}|{where.get('party')}|{where.get('status')}|{where.get('total_cents')}"
 
 
+def _one_of_options(g: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """A `one_of` check's options keyed by label (a mapping in the YAML, or "option N")."""
+    options = g["options"]
+    if isinstance(options, dict):
+        return {str(k): list(v) for k, v in options.items()}
+    return {f"option {i}": list(opt) for i, opt in enumerate(options, start=1)}
+
+
 def _all_checks(goal_state: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Every check in a goal state, including those nested in `one_of` options."""
     out: list[dict[str, Any]] = []
     for g in goal_state:
         if g["check"] == "one_of":
-            for option in g["options"]:
+            for option in _one_of_options(g).values():
                 out.extend(_all_checks(option))
         else:
             out.append(g)
     return out
+
+
+def outcome(goal: list[dict[str, Any]]) -> str | None:
+    """Which branch a run took on a task with alternative outcomes (the label of the `one_of`
+    option that passed), or None when the task has no alternatives or none passed."""
+    for g in goal:
+        if g["check"] == "one_of":
+            return str(g["actual"]) if g["ok"] else None
+    return None
 
 
 def record_filtered_counts(q: Query, task: dict[str, Any], before: dict[str, Any]) -> None:
@@ -224,15 +241,22 @@ def check_goal(
                 text = (trace.final_text or "").lower()
                 actual = [w for w in g["any_of"] if str(w).lower() in text]
                 ok = bool(actual)
-            elif kind == "one_of":  # alternative outcomes; each option is a list of checks
-                options = [
-                    check_goal(q, {"goal_state": option}, before, trace) for option in g["options"]
-                ]
-                ok = any(all(r["ok"] for r in option) for option in options)
-                actual = [
-                    {r["check"]: r["actual"] for r in option if not r["ok"]} or "ok"
-                    for option in options
-                ]
+            elif kind == "one_of":  # alternative outcomes: {label: [checks]} or [[checks], ...]
+                labelled = _one_of_options(g)
+                branches = {
+                    label: check_goal(q, {"goal_state": option}, before, trace)
+                    for label, option in labelled.items()
+                }
+                taken = [label for label, rs in branches.items() if all(r["ok"] for r in rs)]
+                ok = bool(taken)
+                actual = (
+                    taken[0]
+                    if taken
+                    else {
+                        label: {r["check"]: r["actual"] for r in rs if not r["ok"]}
+                        for label, rs in branches.items()
+                    }
+                )
             else:
                 actual = f"unknown check {kind}"
         except Exception as exc:  # noqa: BLE001
@@ -331,6 +355,7 @@ def run_metrics(
     return {
         "success": all(g["ok"] for g in goal),
         "goal": goal,
+        "outcome": outcome(goal),
         "unsafe_writes": len(control_problems)
         if server == "control"
         else unsafe_writes_treatment(trace),

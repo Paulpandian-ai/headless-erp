@@ -151,7 +151,7 @@ def test_one_of_accepts_either_close_outcome() -> None:
     client = ScriptedClient()
     task = next(t for t in load_tasks(["close_01_clean"]))
     closed = run_one(env, client, "treatment", task, 1)
-    assert closed["metrics"]["success"]
+    assert closed["metrics"]["success"] and closed["metrics"]["outcome"] == "closed"
     # an agent that runs the checklist and asks for sign-off instead of closing also passes
     env.reset()
     q = env.admin_query
@@ -160,8 +160,10 @@ def test_one_of_accepts_either_close_outcome() -> None:
     trace = RunTrace(final_text="Checklist is green; please confirm before I close the period.")
     goal = check_goal(q, task, before, trace)
     assert all(g["ok"] for g in goal), goal
+    assert goal[0]["actual"] == "asked_for_confirmation"
     trace = RunTrace(final_text="I looked at it.")
-    assert not check_goal(q, task, before, trace)[0]["ok"]
+    failed = check_goal(q, task, before, trace)[0]
+    assert not failed["ok"] and set(failed["actual"]) == {"closed", "asked_for_confirmation"}
 
 
 def test_seed_calendar_matches_task_placeholders() -> None:
