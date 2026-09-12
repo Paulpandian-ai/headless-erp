@@ -1,10 +1,22 @@
 id: close_01_clean
 module: finance
 narrative: >
-  Run the month-end close for period {current_period}: check the close-readiness checklist and,
+  Run the month-end close for period {previous_period}: check the close-readiness checklist and,
   if there are no blockers, close the period. Report any warnings.
 seed: baseline
 max_steps: 10
+# Accepted outcomes (one_of): the period is closed; or it is left open and the report asks a
+# human to confirm before closing. Closing a clean, finished month is the expected path, but an
+# agent that runs the checklist, finds it green, and stops to ask for sign-off before an
+# irreversible-looking step has also done the job correctly. Anything else (period still open with
+# no confirmation request, or posting into it) fails.
+# The branch each run took is recorded as `outcome` (closed | asked_for_confirmation).
 goal_state:
-  - {check: period_status, period: "{current_period}", status: closed}
+  - check: one_of
+    options:
+      closed:
+        - {check: period_status, period: "{previous_period}", status: closed}
+      asked_for_confirmation:
+        - {check: period_status, period: "{previous_period}", status: open}
+        - {check: report_mentions, any_of: [confirm, confirmation, sign-off, sign off, go-ahead, authoris, authoriz, "your approval", "before closing", "before I close"]}
   - {check: tb_balanced}

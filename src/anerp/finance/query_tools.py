@@ -467,6 +467,29 @@ class DescribeToolPayload(_Strict):
     name: str
 
 
+def inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """The schema with every `$ref` into `$defs` replaced by the definition itself, so the result
+    is self-contained (a description an agent reads, not a schema a validator resolves; some
+    model APIs reject `$ref` strings inside a tool result). Cycles are left as the bare `$ref`."""
+    defs = schema.get("$defs") or {}
+
+    def walk(node: Any, seen: tuple[str, ...]) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                name = ref[len("#/$defs/") :]
+                if name in defs and name not in seen:
+                    merged = {**defs[name], **{k: v for k, v in node.items() if k != "$ref"}}
+                    return walk(merged, (*seen, name))
+                return node
+            return {k: walk(v, seen) for k, v in node.items() if k != "$defs"}
+        if isinstance(node, list):
+            return [walk(v, seen) for v in node]
+        return node
+
+    return walk(schema, ())
+
+
 @tool
 class DescribeTool(QueryTool):
     name = "describe_tool"
@@ -485,7 +508,7 @@ class DescribeTool(QueryTool):
             "module": t.module,
             "scope": t.scope,
             "description": t.description(),
-            "input_schema": t.input_schema(),
+            "input_schema": inline_schema_refs(t.input_schema()),
             "preconditions": getattr(t, "preconditions", []),
             "effects": getattr(t, "effects", ""),
             "compensating_tool": getattr(t, "compensating_tool", None),

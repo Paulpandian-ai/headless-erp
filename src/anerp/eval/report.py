@@ -14,6 +14,7 @@ from typing import Any
 COLUMNS = [
     "server",
     "client",
+    "model",
     "task",
     "runs",
     "success_rate",
@@ -26,6 +27,7 @@ COLUMNS = [
     "avg_output_tokens",
     "avg_wall_s",
     "tb_integrity",
+    "outcomes",
 ]
 
 
@@ -70,6 +72,15 @@ def latency(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _outcomes(metrics: list[dict[str, Any]]) -> str | None:
+    """`closed=2;asked_for_confirmation=1` for tasks with alternative outcomes, else None."""
+    counts: dict[str, int] = defaultdict(int)
+    for x in metrics:
+        if x.get("outcome"):
+            counts[x["outcome"]] += 1
+    return ";".join(f"{k}={v}" for k, v in sorted(counts.items())) or None
+
+
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
@@ -82,6 +93,7 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "server": server,
                 "client": client,
+                "model": next((i.get("model") for i in items if i.get("model")), None),
                 "task": task,
                 "runs": len(items),
                 "success_rate": _mean([x["success"] for x in m]),
@@ -96,6 +108,7 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "avg_output_tokens": _mean([x["output_tokens"] for x in m]),
                 "avg_wall_s": _mean([x["wall_s"] for x in m]),
                 "tb_integrity": _mean([1.0 if x["tb_balanced"] else 0.0 for x in m]),
+                "outcomes": _outcomes(m),
             }
         )
     return out
@@ -136,12 +149,12 @@ def render_report(summary: list[dict[str, Any]], rows: list[dict[str, Any]]) -> 
     lines += [
         "## Headline (per server x client, averaged over tasks)",
         "",
-        "| server | client | tasks | success | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| server | client | model | tasks | success | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for (server, client), items in sorted(by_sc.items()):
         lines.append(
-            f"| {server} | {client} | {len(items)} | {_mean([i['success_rate'] for i in items])} | {_mean([i['unsafe_write_rate'] for i in items])} | {_mean([i['simulate_before_commit_rate'] for i in items])} | {_mean([i['duplicate_document_rate'] for i in items])} | {_mean([i['recovery_success_rate'] for i in items])} | {_mean([i['avg_tool_calls'] for i in items])} | {_mean([i['avg_wall_s'] for i in items])} | {_mean([i['tb_integrity'] for i in items])} |"
+            f"| {server} | {client} | {items[0].get('model') or '-'} | {len(items)} | {_mean([i['success_rate'] for i in items])} | {_mean([i['unsafe_write_rate'] for i in items])} | {_mean([i['simulate_before_commit_rate'] for i in items])} | {_mean([i['duplicate_document_rate'] for i in items])} | {_mean([i['recovery_success_rate'] for i in items])} | {_mean([i['avg_tool_calls'] for i in items])} | {_mean([i['avg_wall_s'] for i in items])} | {_mean([i['tb_integrity'] for i in items])} |"
         )
     lines += [
         "",
@@ -179,6 +192,19 @@ def render_report(summary: list[dict[str, Any]], rows: list[dict[str, Any]]) -> 
             cells = [str(calls_by.get((srv, client, task), "-")) for srv in servers]
             lines.append(f"| {task} | " + " | ".join(cells) + " |")
         lines.append("")
+    branched = [r for r in rows if r["metrics"].get("outcome") or _has_one_of(r)]
+    if branched:
+        lines += [
+            "## Alternative outcomes (tasks with `one_of` goals)",
+            "",
+            "| server | client | task | run | outcome |",
+            "|---|---|---|---|---|",
+        ]
+        for r in branched:
+            lines.append(
+                f"| {r['server']} | {r['client']} | {r['task']} | {r['run']} | {r['metrics'].get('outcome') or 'neither (failed)'} |"
+            )
+        lines.append("")
     failures = [r for r in rows if not r["metrics"]["success"]]
     if failures:
         lines += ["", "## Failed goal checks", ""]
@@ -189,6 +215,10 @@ def render_report(summary: list[dict[str, Any]], rows: list[dict[str, Any]]) -> 
                 + "; ".join(f"{g['check']} got {g['actual']}" for g in bad)
             )
     return "\n".join(lines) + "\n"
+
+
+def _has_one_of(row: dict[str, Any]) -> bool:
+    return any(g.get("check") == "one_of" for g in row["metrics"].get("goal", []))
 
 
 def plot(run_dir: Path, summary: list[dict[str, Any]]) -> None:

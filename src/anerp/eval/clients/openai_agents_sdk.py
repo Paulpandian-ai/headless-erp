@@ -29,8 +29,16 @@ class OpenAIAgentsClient:
         self, narrative: str, surface: ToolSurface, *, max_steps: int, task_id: str
     ) -> RunTrace:
         import anyio
-        from agents import Agent, MaxTurnsExceeded, Runner
+        from agents import Agent, MaxTurnsExceeded, Runner, set_default_openai_client
         from agents.mcp import MCPServerStreamableHttp
+        from openai import AsyncOpenAI
+
+        # A run reads ~0.5M tokens over a minute or two; an org's tokens-per-minute limit is
+        # routinely hit mid-run. The SDK's default 2 retries (sub-10 s) cannot ride that out;
+        # the client honours `retry-after` and backs off between attempts.
+        set_default_openai_client(
+            AsyncOpenAI(max_retries=int(os.environ.get("ANERP_OPENAI_MAX_RETRIES", "10")))
+        )
 
         if not isinstance(surface, RemoteSurface):
             return RunTrace(

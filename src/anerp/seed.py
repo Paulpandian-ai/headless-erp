@@ -4,6 +4,7 @@ through `core.dispatch` like any other client (DESIGN.md §3)."""
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from typing import Any
 
 from sqlmodel import Session, select
@@ -31,9 +32,28 @@ SEED_ACTOR = "system:seed"
 
 
 SEED_YEARS = (2025, 2026, 2027)
-CLOSED_PERIOD = "2026-08"  # the baseline fixture keeps 2026-08 closed and 2026-09 open
-OPEN_PERIOD = "2026-09"
-OPENING_DATE = "2026-09-01"  # opening balances are dated in the open period
+
+
+def baseline_periods(today: date | None = None) -> dict[str, str]:
+    """The baseline fixture's calendar, relative to `today`: the month before last is closed, last
+    month (the first open period, where the opening balances are dated) and this month are open.
+    Relative so that "close last month" is always a real task and "post into the closed month" is
+    always refused, whatever the date."""
+    today = today or utcnow().date()
+    prev = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+    closed_end = prev - timedelta(days=1)
+    return {
+        "closed_period": closed_end.strftime("%Y-%m"),
+        "closed_period_end": closed_end.isoformat(),
+        "open_period": prev.strftime("%Y-%m"),
+        "opening_date": prev.isoformat(),
+    }
+
+
+_PERIODS = baseline_periods()
+CLOSED_PERIOD = _PERIODS["closed_period"]
+OPEN_PERIOD = _PERIODS["open_period"]  # last month: open, holds the opening balances
+OPENING_DATE = _PERIODS["opening_date"]
 
 
 def seed_kernel(session: Session, year: int | None = None) -> dict[str, int]:
@@ -94,7 +114,8 @@ def seed_fixture(
     session: Session, name: str = "baseline", actor_id: str = SEED_ACTOR
 ) -> dict[str, Any]:
     """`empty`: chart of accounts and periods only. `baseline`: the demo master data, opening capital
-    and opening stock as opening journal entries (through the dispatcher), and period 2026-08 closed.
+    and opening stock as opening journal entries (through the dispatcher) dated the first of last
+    month, and the month before last closed (`baseline_periods`).
     Runs inside the caller's transaction: all or nothing."""
     counts = seed_kernel(session)
     if name == "empty":

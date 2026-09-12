@@ -687,8 +687,9 @@ no GL effect for the close-readiness blocker.)
 | Item | HOSE-10M | Reinforced hose 10 m | | 25.00 | 40.00 | 40 |
 | Item | FLANGE-4 | Flange 4 bolt | | 15.00 | 24.00 | 100 |
 
-Periods 2025–2027 exist; **2026-08 is closed**, 2026-09 is open. Opening capital 250,000.00 and opening stock
-are opening journal entries dated 2026-09-01 through the dispatcher (`create_item` with `opening_qty` posts
+Periods 2025–2027 (plus the current year ±1) exist; the calendar is relative to the seeding date
+(`seed.baseline_periods`): **the month before last is closed**, last month and this month are open. Opening
+capital 250,000.00 and opening stock are opening journal entries dated the first of last month through the dispatcher (`create_item` with `opening_qty` posts
 Dr 1300 Inventory / Cr 3000 Owner's equity at standard cost, 2,750.00 in total), so no purchase order, goods
 receipt or GR/IR balance is left behind. The fixture is applied atomically: `anerp seed` commits once at the
 end and `reset_and_seed` is one transaction ending with the `system.reset` event and receipt (a failure
