@@ -68,6 +68,38 @@ def test_duplicate_documents_counts_only_repeated_requests() -> None:
     ]
 
 
+def test_duplicate_documents_tolerates_raw_inserts() -> None:
+    """A control agent writes invoice lines in whatever shape it likes; the fingerprint must not
+    assume the kernel's keys, and two identical raw inserts must still count as one duplicate."""
+    env = Environment()
+    env.reset()
+    before = snapshot(env.admin_query)
+    supplier = crud_call("list_rows", {"table": "supplier", "filters": {"code": "ACME"}})["result"][
+        0
+    ]
+    po = env.admin_commit(
+        "create_purchase_order",
+        {"supplier": "ACME", "lines": [{"sku": "VALVE-2IN", "qty": 10, "unit_cost": "50.00"}]},
+    )["document"]
+    for n in (1, 2):
+        crud_call(
+            "insert_row",
+            {
+                "table": "supplier_invoice",
+                "values": {
+                    "number": f"SINV-99999{n}",
+                    "supplier_id": supplier["id"],
+                    "po_id": po["id"],
+                    "supplier_reference": "RAW-1",
+                    "lines": [{"item": "VALVE-2IN", "quantity": 10, "price": 50.0}],
+                    "total_cents": 50000,
+                    "posting_date": "2026-09-11",
+                },
+            },
+        )
+    assert duplicate_documents(env.admin_query, before) == ["SupplierInvoice SINV-999992"]
+
+
 def test_scripted_client_on_control_surface() -> None:
     """The CRUD oracle does its own bookkeeping: every task passes except the one the control
     surface cannot express (no approval requests), and it never leaves the books unbalanced."""
