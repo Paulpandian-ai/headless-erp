@@ -166,6 +166,28 @@ def test_one_of_accepts_either_close_outcome() -> None:
     assert not failed["ok"] and set(failed["actual"]) == {"closed", "asked_for_confirmation"}
 
 
+def test_step_factor_and_outcome_categories(monkeypatch) -> None:
+    from anerp.eval.metrics import outcome_category
+    from anerp.eval.runner import step_limit
+
+    task = next(t for t in load_tasks(["p2p_01_simple"]))
+    assert step_limit(task, "control") == task["max_steps"] == 24
+    monkeypatch.setenv("ANERP_EVAL_STEP_FACTOR_CONTROL", "5")
+    assert step_limit(task, "control") == 120 and step_limit(task, "treatment") == 24
+    monkeypatch.setenv("ANERP_EVAL_STEP_FACTOR", "2")
+    assert step_limit(task, "treatment") == 48 and step_limit(task, "control") == 240
+
+    assert outcome_category(True, RunTrace(error="max_steps")) == "success"
+    assert outcome_category(False, RunTrace(error="max_steps")) == "step_limit"
+    assert outcome_category(False, RunTrace(error="APIError: rate limit")) == "client_error"
+    assert outcome_category(False, RunTrace()) == "failure"
+    env = Environment()
+    row = run_one(env, ScriptedClient(), "treatment", task, 1)
+    assert row["metrics"]["max_steps"] == 48 and row["metrics"]["outcome_category"] == "success"
+    summary = summarize([row])[0]
+    assert summary["step_limit_rate"] == 0.0 and summary["failure_rate"] == 0.0
+
+
 def test_seed_calendar_matches_task_placeholders() -> None:
     from anerp.eval.tasks_loader import placeholders
 

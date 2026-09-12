@@ -358,6 +358,9 @@ def _server_side_trace(
                 e.get("error_code"),
                 e.get("mode") if e.get("mode") in ("simulate", "commit") else None,
                 float(e.get("latency_ms") or 0.0),
+                idempotency_key=e.get("idempotency_key"),
+                simulation_id=e.get("simulation_id"),
+                outcome=e.get("outcome"),
             )
             for e in env.agent_request_log()
         ]
@@ -366,6 +369,15 @@ def _server_side_trace(
         trace.tool_calls = recorded
     else:
         trace.extra["trace_source"] = "client (server log empty)"
+
+
+def step_limit(task: dict[str, Any], server: str) -> int:
+    """The task's `max_steps` scaled by ANERP_EVAL_STEP_FACTOR (both arms) and
+    ANERP_EVAL_STEP_FACTOR_<SERVER> (one arm). The limit is per agent round; its unit is the
+    adapter's (turns for claude_agent_sdk/openai_agents_sdk, LLM calls for google_adk)."""
+    factor = float(os.environ.get("ANERP_EVAL_STEP_FACTOR", "1"))
+    factor *= float(os.environ.get(f"ANERP_EVAL_STEP_FACTOR_{server.upper()}", "1"))
+    return max(1, int(round(int(task["max_steps"]) * factor)))
 
 
 RATE_LIMIT_MARKERS = (
@@ -426,6 +438,7 @@ def _run_once(
             log.warning("reset/setup for %s failed (attempt %s); retrying", task["id"], attempt + 1)
             time.sleep(5 * (attempt + 1))
     surface = env.surface(server, over_http=bool(getattr(client, "needs_remote", False)))
+    limit = step_limit(task, server)
     if server == "control":
         from anerp.eval.crud_server import drain_call_log
 
@@ -439,9 +452,7 @@ def _run_once(
         for _ in range(int(task.get("repeat", 1))):
             _merge(
                 trace,
-                client.run(
-                    narrative, surface, max_steps=task["max_steps"], task_id=f"{task['id']}__{run}"
-                ),
+                client.run(narrative, surface, max_steps=limit, task_id=f"{task['id']}__{run}"),
             )
             rounds += 1
         for _ in range(int(task.get("max_rounds", 3)) - 1):
@@ -451,9 +462,7 @@ def _run_once(
             narrative = f"{task['narrative']} Status update: {'; '.join(updates)}. Continue from there; do not repeat what is already done."
             _merge(
                 trace,
-                client.run(
-                    narrative, surface, max_steps=task["max_steps"], task_id=f"{task['id']}__{run}"
-                ),
+                client.run(narrative, surface, max_steps=limit, task_id=f"{task['id']}__{run}"),
             )
             rounds += 1
     except Exception as exc:  # noqa: BLE001
@@ -464,6 +473,7 @@ def _run_once(
         _server_side_trace(env, server, surface, trace)
     metrics = run_metrics(q, task, before, trace, server, wall)
     metrics["rounds"] = rounds
+    metrics["max_steps"] = limit
     return {
         "server": server,
         "client": client.name,
