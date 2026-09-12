@@ -33,10 +33,10 @@ on:
         default: "claude-sonnet-5"
       openai_model:
         description: "ANERP_OPENAI_MODEL"
-        default: "gpt-5-mini"
+        default: "gpt-5.6-terra"
       google_model:
         description: "ANERP_GOOGLE_MODEL"
-        default: "gemini-2.5-flash"
+        default: "gemini-3.8-flash"
       commit_results:
         description: "Commit the merged results/<run_id>/ back to the branch"
         type: boolean
