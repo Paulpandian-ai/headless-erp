@@ -83,9 +83,11 @@ defaults are each vendor's strongest tier (`claude-opus-5`, `gpt-5`, `gemini-3.1
 
 ## The matrix on GitHub Actions
 
-`.github/workflows/eval.yml` (manual dispatch) runs the paper's matrix: one job per client x
-server against its own Postgres service container - a single job would exceed the 6-hour
-limit at 60-90 s per run - then a `merge` job that rebuilds `summary.csv`, `latency.csv` and
+`.github/workflows/eval.yml` (manual dispatch, or push a tag `eval-matrix-<id>`) runs the
+paper's matrix: one job per client (vendor) against its own Postgres service container, the two
+arms one after the other - a vendor's arms in parallel double the token rate and trip its
+tokens-per-minute limit, while one job for everything would exceed the 6-hour limit - then a
+`merge` job that rebuilds `summary.csv`, `latency.csv` and
 `report.md` over every row with `anerp eval-merge` and uploads `results/<run_id>/` as an
 artifact (`commit_results` also commits it to the branch). Its defaults are the **tier-matched
 cross-vendor comparison**: each vendor's current mid-tier model (`claude-sonnet-5`,
@@ -115,6 +117,9 @@ asking a human to confirm - an agent that finds the checklist green and stops fo
 before an irreversible-looking step is not wrong.
 
 If the database is down the harness stops before the first run with a message pointing here.
+A run whose client died on a vendor rate limit is repeated from a fresh kernel after a pause
+(`ANERP_EVAL_RUN_RETRIES`, default 2); the row records `attempts`. The OpenAI adapter also
+raises its client's retries (`ANERP_OPENAI_MAX_RETRIES`, default 10), honouring `retry-after`.
 
 ### Model-free run on both arms
 

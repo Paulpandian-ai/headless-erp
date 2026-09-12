@@ -1,12 +1,15 @@
 # Manual: run the evaluation matrix (DESIGN.md §14) on GitHub Actions and upload results as an
-# artifact. One job per client x server against its own Postgres service container (a single job
-# would exceed the 6-hour limit at ~60-90 s per run), then a merge job that rebuilds
-# summary.csv, latency.csv and report.md over every row with `anerp eval-merge`.
+# artifact. One job per client (vendor) against its own Postgres service container, running the
+# arms one after the other - a vendor's two arms in parallel double the token rate and trip the
+# org's tokens-per-minute limit, and a single job for everything would exceed the 6-hour limit -
+# then a merge job that rebuilds summary.csv, latency.csv and report.md over every row with
+# `anerp eval-merge`.
 #
 # Defaults are the tier-matched cross-vendor comparison: each vendor's mid-tier model, both arms,
 # all 20 tasks, 3 runs. Override the model inputs to run a different tier. Pushing a tag named
 # eval-matrix-<anything> launches the default matrix with the tag as run id (for environments
-# whose token cannot dispatch workflows).
+# whose token cannot dispatch workflows); `eval-matrix-<id>+<client>[+<client>]` restricts it to
+# those clients.
 name: eval
 on:
   push:
@@ -44,6 +47,7 @@ on:
 
 env:
   RUN_ID: ${{ inputs.run_id || (github.ref_type == 'tag' && github.ref_name) || format('matrix-{0}', github.run_number) }}
+  PYTHONUNBUFFERED: "1"
   CLIENTS: ${{ inputs.clients || 'claude_agent_sdk,openai_agents_sdk,google_adk' }}
   SERVERS: ${{ inputs.servers || 'treatment,control' }}
   RUNS: ${{ inputs.runs || '3' }}
@@ -63,8 +67,10 @@ jobs:
         run: |
           import json, os
           clients = [c.strip() for c in os.environ["CLIENTS"].split(",") if c.strip()]
-          servers = [s.strip() for s in os.environ["SERVERS"].split(",") if s.strip()]
-          include = [{"client": c, "server": s} for c in clients for s in servers]
+          ref = os.environ.get("GITHUB_REF_NAME", "")
+          if os.environ.get("GITHUB_REF_TYPE") == "tag" and "+" in ref:
+              clients = ref.split("+")[1:]
+          include = [{"client": c} for c in clients]
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("matrix=" + json.dumps({"include": include}) + "\n")
 
@@ -93,12 +99,12 @@ jobs:
       - name: Isolated interpreter for google-adk (needs mcp 1.x)
         if: matrix.client == 'google_adk'
         run: uv venv .venv-adk --python 3.12 && uv pip install --python .venv-adk/bin/python google-adk "mcp<2"
-      - name: Run ${{ matrix.client }} on ${{ matrix.server }}
+      - name: Run ${{ matrix.client }} on both arms
         run: >
           uv run --all-extras anerp eval
-          --clients "${{ matrix.client }}" --servers "${{ matrix.server }}"
+          --clients "${{ matrix.client }}" --servers "${SERVERS}"
           --runs "${RUNS}" --tasks "${TASKS}"
-          --output results --run-id "${RUN_ID}-${{ matrix.client }}-${{ matrix.server }}"
+          --output results --run-id "${RUN_ID}-${{ matrix.client }}"
         env:
           ANERP_ENV: dev
           ANERP_EVAL_DATABASE_URL: postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval
@@ -111,8 +117,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: eval-arm-${{ matrix.client }}-${{ matrix.server }}
-          path: results/${{ env.RUN_ID }}-${{ matrix.client }}-${{ matrix.server }}/
+          name: eval-arm-${{ matrix.client }}
+          path: results/${{ env.RUN_ID }}-${{ matrix.client }}/
           if-no-files-found: warn
 
   merge:

@@ -368,7 +368,48 @@ def _server_side_trace(
         trace.extra["trace_source"] = "client (server log empty)"
 
 
+RATE_LIMIT_MARKERS = (
+    "rate limit",
+    "rate_limit",
+    "429",
+    "resource_exhausted",
+    "overloaded",
+    "quota",
+)
+"""Substrings of a client error that mean the vendor throttled us, not that the agent failed."""
+
+
+def _rate_limited(error: str | None) -> bool:
+    return any(m in (error or "").lower() for m in RATE_LIMIT_MARKERS)
+
+
 def run_one(
+    env: Environment, client: Any, server: str, task: dict[str, Any], run: int
+) -> dict[str, Any]:
+    """One run; repeated from a fresh kernel (up to `ANERP_EVAL_RUN_RETRIES`, default 2, after a
+    pause) when the client died on a vendor rate limit, so throttling shows up as `attempts` on
+    the row rather than as an agent failure."""
+    retries = int(os.environ.get("ANERP_EVAL_RUN_RETRIES", "2"))
+    for attempt in range(1, retries + 2):
+        row = _run_once(env, client, server, task, run)
+        row["attempts"] = attempt
+        if not _rate_limited(row["trace"].get("error")) or attempt > retries:
+            return row
+        pause = 60 * attempt
+        log.warning(
+            "%s/%s/%s run %s hit a rate limit (attempt %s); retrying in %ss",
+            server,
+            client.name,
+            task["id"],
+            run,
+            attempt,
+            pause,
+        )
+        time.sleep(pause)
+    return row  # pragma: no cover
+
+
+def _run_once(
     env: Environment, client: Any, server: str, task: dict[str, Any], run: int
 ) -> dict[str, Any]:
     for attempt in range(3):  # a remote deployment can hiccup; a fresh kernel is all-or-nothing
