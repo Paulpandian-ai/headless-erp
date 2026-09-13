@@ -9,7 +9,7 @@
 # all 20 tasks, 3 runs. Override the model inputs to run a different tier. Pushing a tag named
 # eval-matrix-<anything> launches the default matrix with the tag as run id (for environments
 # whose token cannot dispatch workflows); `eval-matrix-<id>+<client>[+<client>]` restricts it to
-# those clients, and `,key=value` suffixes override servers, runs, tasks, step_factor and
+# those clients, and `,key=value` suffixes override servers, runs, tasks (an id that names no task is a prefix: `tasks=p2p`), step_factor and
 # step_factor_control (e.g. `eval-matrix-4+google_adk,servers=control,step_factor_control=5`).
 name: eval
 on:

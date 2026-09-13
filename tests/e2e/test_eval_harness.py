@@ -17,6 +17,14 @@ from anerp.eval.tasks_loader import load_tasks
 def test_tasks_load() -> None:
     tasks = load_tasks()
     assert len(tasks) == 20
+    assert [t["id"] for t in load_tasks(["p2p"])] == sorted(
+        t["id"] for t in tasks if t["id"].startswith("p2p")
+    )
+    assert [t["id"] for t in load_tasks(["gl_01_manual_je", "close"])] == [
+        "close_01_clean",
+        "close_02_blocked",
+        "gl_01_manual_je",
+    ]
     assert {t["module"] for t in tasks} == {"procurement", "sales", "finance"}
     assert all(t["goal_state"] for t in tasks)
 
