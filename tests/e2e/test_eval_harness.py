@@ -181,6 +181,11 @@ def test_step_factor_and_outcome_categories(monkeypatch) -> None:
     assert outcome_category(False, RunTrace(error="max_steps")) == "step_limit"
     assert outcome_category(False, RunTrace(error="APIError: rate limit")) == "client_error"
     assert outcome_category(False, RunTrace()) == "failure"
+    from anerp.eval.runner import _rate_limited
+
+    assert _rate_limited("APIError: Rate limit reached ... tokens per min (TPM)")
+    assert _rate_limited("ServerError: 503 UNAVAILABLE high demand") is False  # not a rate limit
+    assert not _rate_limited("429 RESOURCE_EXHAUSTED: Your prepayment credits are depleted")
     env = Environment()
     row = run_one(env, ScriptedClient(), "treatment", task, 1)
     assert row["metrics"]["max_steps"] == 48 and row["metrics"]["outcome_category"] == "success"

@@ -391,8 +391,15 @@ RATE_LIMIT_MARKERS = (
 """Substrings of a client error that mean the vendor throttled us, not that the agent failed."""
 
 
+NOT_RETRYABLE_MARKERS = ("credits are depleted", "billing", "insufficient_quota", "credit balance")
+"""A 429 that means the account is out of money is not throttling; waiting will not help."""
+
+
 def _rate_limited(error: str | None) -> bool:
-    return any(m in (error or "").lower() for m in RATE_LIMIT_MARKERS)
+    text = (error or "").lower()
+    if any(m in text for m in NOT_RETRYABLE_MARKERS):
+        return False
+    return any(m in text for m in RATE_LIMIT_MARKERS)
 
 
 def run_one(
