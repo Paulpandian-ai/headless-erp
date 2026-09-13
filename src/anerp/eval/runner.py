@@ -602,3 +602,64 @@ def run_matrix(
         "backends": sorted({r["backend"] for r in rows}),
         **files,
     }
+
+
+def retry_rows(run_dir: str, categories: list[str]) -> dict[str, Any]:
+    """Re-run, in place, the rows of results/<run_id>/ whose outcome category is in
+    `categories` (e.g. vendor_unavailable: the vendor could not serve them), with the same
+    client, server, task and run number, then regenerate the outputs. Rows keep their position;
+    the replaced row records `retried_from` (the old category) and `attempts`."""
+    from anerp.eval.metrics import outcome_category
+    from anerp.eval.report import load_raw, write_outputs
+
+    path = Path(run_dir) / "raw.jsonl"
+    rows = load_raw(path)
+    tasks = {t["id"]: t for t in load_tasks()}
+    clients: dict[str, Any] = {}
+    local_env = Environment(
+        database_url=os.environ.get("ANERP_EVAL_DATABASE_URL"), agent_subject="agent:eval"
+    )
+    loopbacks: list[LoopbackMcp] = []
+    replaced = 0
+    try:
+        for i, row in enumerate(rows):
+            trace = RunTrace(error=row["trace"].get("error"))
+            category = outcome_category(bool(row["metrics"]["success"]), trace)
+            if category not in categories:
+                continue
+            client = clients.get(row["client"])
+            if client is None:
+                client = clients[row["client"]] = make_client(row["client"])
+                if not client.available():
+                    raise SystemExit(f"client {row['client']} is not available here")
+                if getattr(client, "needs_remote", False) and not loopbacks:
+                    local_env.reset()
+                    for server in sorted({r["server"] for r in rows}):
+                        lb = (
+                            treatment_loopback("agent:eval")
+                            if server == "treatment"
+                            else control_loopback()
+                        ).start()
+                        setattr(local_env, f"{server}_url", lb.url)
+                        loopbacks.append(lb)
+            log.info(
+                "retrying %s/%s/%s run %s (%s)",
+                row["server"],
+                row["client"],
+                row["task"],
+                row["run"],
+                category,
+            )
+            new = run_one(local_env, client, row["server"], tasks[row["task"]], int(row["run"]))
+            new["backend"] = local_env.backend
+            new["retried_from"] = category
+            rows[i] = new
+            replaced += 1
+            with path.open("w") as f:
+                for r in rows:
+                    f.write(json.dumps(r, default=str) + "\n")
+    finally:
+        for lb in loopbacks:
+            lb.stop()
+    files = write_outputs(Path(run_dir), rows)
+    return {"run_dir": run_dir, "replaced": replaced, **files}

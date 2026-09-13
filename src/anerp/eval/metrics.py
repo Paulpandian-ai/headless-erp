@@ -341,19 +341,26 @@ def simulate_before_commit_rate(trace: RunTrace) -> float | None:
     return round(covered / len(commits), 3)
 
 
-OUTCOME_CATEGORIES = ("success", "step_limit", "client_error", "failure")
+OUTCOME_CATEGORIES = ("success", "step_limit", "vendor_unavailable", "client_error", "failure")
+UNAVAILABLE_MARKERS = ("503", "unavailable", "overloaded", "high demand")
+"""The vendor could not serve the run at all (capacity, not our request): a dropout."""
 
 
 def outcome_category(success: bool, trace: RunTrace) -> str:
     """Why a run ended the way it did, one label per run: the goal was met (`success`); the
-    agent exhausted its step limit before meeting it (`step_limit`); the client died on a
-    vendor-side error - rate limit, API rejection, transport (`client_error`); or the agent
-    finished under its own steam and the goal was not met (`failure`). A run that hit the
-    limit but still meets the goal is a success."""
+    agent exhausted its step limit before meeting it (`step_limit`); the vendor refused to
+    serve the run for capacity reasons after every retry - 503 UNAVAILABLE, "overloaded"
+    (`vendor_unavailable`, a dropout, so success rates are also reported over completed runs);
+    the client died on another vendor-side error - rate limit, API rejection, transport
+    (`client_error`); or the agent finished under its own steam and the goal was not met
+    (`failure`). A run that hit the limit but still meets the goal is a success."""
     if success:
         return "success"
     if trace.error == "max_steps":
         return "step_limit"
+    err = (trace.error or "").lower()
+    if any(m in err for m in UNAVAILABLE_MARKERS):
+        return "vendor_unavailable"
     if trace.error:
         return "client_error"
     return "failure"

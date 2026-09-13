@@ -18,7 +18,9 @@ COLUMNS = [
     "task",
     "runs",
     "success_rate",
+    "success_rate_completed",
     "step_limit_rate",
+    "vendor_unavailable_rate",
     "client_error_rate",
     "failure_rate",
     "unsafe_write_rate",
@@ -76,13 +78,15 @@ def latency(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _category(x: dict[str, Any]) -> str:
-    """Outcome category, derived for rows written before it was recorded."""
-    if x.get("outcome_category"):
-        return str(x["outcome_category"])
+    """Outcome category, recomputed from success and the client error so rows written before a
+    category existed classify the same way as new ones."""
     if x["success"]:
         return "success"
     if x.get("error") == "max_steps":
         return "step_limit"
+    err = (x.get("error") or "").lower()
+    if any(m in err for m in ("503", "unavailable", "overloaded", "high demand")):
+        return "vendor_unavailable"
     return "client_error" if x.get("error") else "failure"
 
 
@@ -111,7 +115,11 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "task": task,
                 "runs": len(items),
                 "success_rate": _mean([x["success"] for x in m]),
+                "success_rate_completed": _mean(
+                    [x["success"] for x in m if _category(x) != "vendor_unavailable"]
+                ),
                 "step_limit_rate": _mean([_category(x) == "step_limit" for x in m]),
+                "vendor_unavailable_rate": _mean([_category(x) == "vendor_unavailable" for x in m]),
                 "client_error_rate": _mean([_category(x) == "client_error" for x in m]),
                 "failure_rate": _mean([_category(x) == "failure" for x in m]),
                 "unsafe_write_rate": _mean([1.0 if x["unsafe_writes"] else 0.0 for x in m]),
@@ -162,8 +170,9 @@ def render_report(summary: list[dict[str, Any]], rows: list[dict[str, Any]]) -> 
         "",
         f"Runs: {len(rows)}. Grouped per server x client x task (DESIGN.md §14.4). "
         "Outcome categories per run: success (goal met), step-limit (agent exhausted its step limit "
-        "before meeting it), client error (vendor rate limit / API rejection / transport), failure "
-        "(finished, goal not met)."
+        "before meeting it), vendor unavailable (the vendor could not serve the run after every "
+        "retry - 503/overloaded; a dropout, so success is also given over completed runs), client "
+        "error (rate limit / API rejection / transport), failure (finished, goal not met)."
         + (f" Step limits in this run: {limits[0]}-{limits[-1]} per round." if limits else ""),
         "",
     ]
@@ -173,12 +182,12 @@ def render_report(summary: list[dict[str, Any]], rows: list[dict[str, Any]]) -> 
     lines += [
         "## Headline (per server x client, averaged over tasks)",
         "",
-        "| server | client | model | tasks | success | step-limit | client error | failure | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| server | client | model | tasks | success (all runs) | success (completed runs) | step-limit | vendor unavailable | client error | failure | unsafe writes | simulate-before-commit | duplicates | recovery | tool calls | wall s | TB integrity |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for (server, client), items in sorted(by_sc.items()):
         lines.append(
-            f"| {server} | {client} | {items[0].get('model') or '-'} | {len(items)} | {_mean([i['success_rate'] for i in items])} | {_mean([i['step_limit_rate'] for i in items])} | {_mean([i['client_error_rate'] for i in items])} | {_mean([i['failure_rate'] for i in items])} | {_mean([i['unsafe_write_rate'] for i in items])} | {_mean([i['simulate_before_commit_rate'] for i in items])} | {_mean([i['duplicate_document_rate'] for i in items])} | {_mean([i['recovery_success_rate'] for i in items])} | {_mean([i['avg_tool_calls'] for i in items])} | {_mean([i['avg_wall_s'] for i in items])} | {_mean([i['tb_integrity'] for i in items])} |"
+            f"| {server} | {client} | {items[0].get('model') or '-'} | {len(items)} | {_mean([i['success_rate'] for i in items])} | {_mean([i['success_rate_completed'] for i in items])} | {_mean([i['step_limit_rate'] for i in items])} | {_mean([i['vendor_unavailable_rate'] for i in items])} | {_mean([i['client_error_rate'] for i in items])} | {_mean([i['failure_rate'] for i in items])} | {_mean([i['unsafe_write_rate'] for i in items])} | {_mean([i['simulate_before_commit_rate'] for i in items])} | {_mean([i['duplicate_document_rate'] for i in items])} | {_mean([i['recovery_success_rate'] for i in items])} | {_mean([i['avg_tool_calls'] for i in items])} | {_mean([i['avg_wall_s'] for i in items])} | {_mean([i['tb_integrity'] for i in items])} |"
         )
     lines += [
         "",

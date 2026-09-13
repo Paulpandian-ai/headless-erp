@@ -188,6 +188,10 @@ def test_step_factor_and_outcome_categories(monkeypatch) -> None:
     assert outcome_category(True, RunTrace(error="max_steps")) == "success"
     assert outcome_category(False, RunTrace(error="max_steps")) == "step_limit"
     assert outcome_category(False, RunTrace(error="APIError: rate limit")) == "client_error"
+    assert (
+        outcome_category(False, RunTrace(error="ServerError: 503 UNAVAILABLE. high demand"))
+        == "vendor_unavailable"
+    )
     assert outcome_category(False, RunTrace()) == "failure"
     from anerp.eval.runner import _rate_limited
 
@@ -199,6 +203,32 @@ def test_step_factor_and_outcome_categories(monkeypatch) -> None:
     assert row["metrics"]["max_steps"] == 48 and row["metrics"]["outcome_category"] == "success"
     summary = summarize([row])[0]
     assert summary["step_limit_rate"] == 0.0 and summary["failure_rate"] == 0.0
+
+
+def test_eval_retry_replaces_only_matching_rows(tmp_path: Path) -> None:
+    import json
+
+    from anerp.eval.runner import retry_rows
+
+    result = run_matrix(
+        clients=["scripted"],
+        servers=["treatment"],
+        tasks=["gl_01_manual_je", "gl_03_closed_period"],
+        runs=1,
+        output_dir=str(tmp_path),
+        run_id="r",
+    )
+    raw = Path(result["raw"])
+    rows = load_raw(raw)
+    rows[0]["metrics"]["success"] = False  # pretend the vendor dropped the first run
+    rows[0]["metrics"]["outcome_category"] = "vendor_unavailable"
+    rows[0]["trace"]["error"] = "ServerError: 503 UNAVAILABLE"
+    raw.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    out = retry_rows(str(tmp_path / "r"), ["vendor_unavailable"])
+    assert out["replaced"] == 1
+    fixed = load_raw(raw)
+    assert fixed[0]["task"] == rows[0]["task"] and fixed[0]["retried_from"] == "vendor_unavailable"
+    assert fixed[0]["metrics"]["success"] and "retried_from" not in fixed[1]
 
 
 def test_seed_calendar_matches_task_placeholders() -> None:
