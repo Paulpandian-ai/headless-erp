@@ -1,17 +1,21 @@
 cff-version: 1.2.0
-message: "If you use anerp in research, please cite it as below."
+message: "If you use anerp or its evaluation results in research, please cite it as below."
 title: "anerp: an agent-native headless ERP kernel"
-version: 0.1.0
-date-released: 2026-09-02
+version: 0.2.0
+date-released: 2026-09-16
 license: Apache-2.0
 repository-code: "https://github.com/Paulpandian-ai/headless-erp"
+url: "https://github.com/Paulpandian-ai/headless-erp"
+# doi: filled in from the Zenodo record minted for the v0.2.0 GitHub release
 abstract: >
   A headless ERP kernel with no user interface whose only public surface is a set of
   typed business-operation tools over the Model Context Protocol and a task-level agent
   over the Agent-to-Agent protocol. Every write is two-phase (simulate/commit), idempotent,
   receipted, policy-checked and event-emitting, on a single double-entry ledger. Built to
   test whether an ERP designed for agents yields higher agent task success and safety than
-  a UI-era ERP with an MCP wrapper.
+  a UI-era ERP with an MCP wrapper. Release 0.2.0 includes the evaluation harness and the
+  tier-matched matrix results (claude-sonnet-5, gpt-5.6-terra, gemini-3.8-flash; two tool
+  surfaces; twenty tasks; three runs) described in REPRODUCIBILITY.md.
 authors:
   - name: "anerp contributors"
 keywords:
@@ -20,3 +24,4 @@ keywords:
   - MCP
   - A2A
   - double-entry ledger
+  - evaluation

@@ -175,6 +175,8 @@ re-runs a past payload against current state and diffs the projection. CLI mirro
 
 ## Evaluation harness
 
+The results matrix and every number behind it are in [`results/README.md`](results/README.md); the exact commit, model identifiers, dates, seed and re-run instructions are in [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md). Cite via `CITATION.cff`.
+
 `anerp.eval` compares the agent-native surface (**treatment**) against a naive CRUD MCP server
 over the same tables (**control**, `src/anerp/eval/crud_server.py`, the only code that bypasses
 the dispatcher). Twenty tasks live in `src/anerp/eval/tasks/*.yaml` with goal-state assertions
