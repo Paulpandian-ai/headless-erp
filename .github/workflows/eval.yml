@@ -9,7 +9,8 @@
 # all 20 tasks, 3 runs. Override the model inputs to run a different tier. Pushing a tag named
 # eval-matrix-<anything> launches the default matrix with the tag as run id (for environments
 # whose token cannot dispatch workflows); `eval-matrix-<id>+<client>[+<client>]` restricts it to
-# those clients.
+# those clients, and `,key=value` suffixes override servers, runs, tasks (an id that names no task is a prefix: `tasks=p2p`), step_factor and
+# step_factor_control (e.g. `eval-matrix-4+google_adk,servers=control,step_factor_control=5`).
 name: eval
 on:
   push:
@@ -61,18 +62,32 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      servers: ${{ steps.plan.outputs.servers }}
+      runs: ${{ steps.plan.outputs.runs }}
+      tasks: ${{ steps.plan.outputs.tasks }}
+      step_factor: ${{ steps.plan.outputs.step_factor }}
+      step_factor_control: ${{ steps.plan.outputs.step_factor_control }}
     steps:
       - id: plan
         shell: python
         run: |
           import json, os
+          opts = {"servers": os.environ["SERVERS"], "runs": os.environ["RUNS"], "tasks": os.environ["TASKS"],
+                  "step_factor": "1", "step_factor_control": "1"}
           clients = [c.strip() for c in os.environ["CLIENTS"].split(",") if c.strip()]
           ref = os.environ.get("GITHUB_REF_NAME", "")
           if os.environ.get("GITHUB_REF_TYPE") == "tag" and "+" in ref:
-              clients = ref.split("+")[1:]
+              parts = ref.split(",")
+              clients = parts[0].split("+")[1:]
+              for kv in parts[1:]:
+                  k, _, v = kv.partition("=")
+                  if k in opts and v:
+                      opts[k] = v
           include = [{"client": c} for c in clients]
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("matrix=" + json.dumps({"include": include}) + "\n")
+              for k, v in opts.items():
+                  f.write(f"{k}={v}\n")
 
   arm:
     needs: plan
@@ -102,11 +117,13 @@ jobs:
       - name: Run ${{ matrix.client }} on both arms
         run: >
           uv run --all-extras anerp eval
-          --clients "${{ matrix.client }}" --servers "${SERVERS}"
-          --runs "${RUNS}" --tasks "${TASKS}"
+          --clients "${{ matrix.client }}" --servers "${{ needs.plan.outputs.servers }}"
+          --runs "${{ needs.plan.outputs.runs }}" --tasks "${{ needs.plan.outputs.tasks }}"
           --output results --run-id "${RUN_ID}-${{ matrix.client }}"
         env:
           ANERP_ENV: dev
+          ANERP_EVAL_STEP_FACTOR: ${{ needs.plan.outputs.step_factor }}
+          ANERP_EVAL_STEP_FACTOR_CONTROL: ${{ needs.plan.outputs.step_factor_control }}
           ANERP_EVAL_DATABASE_URL: postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval
           ANERP_ANTHROPIC_MODEL: ${{ env.ANTHROPIC_MODEL }}
           ANERP_OPENAI_MODEL: ${{ env.OPENAI_MODEL }}

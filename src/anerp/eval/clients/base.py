@@ -23,6 +23,11 @@ class ToolCallRecord:
     error_code: str | None = None
     mode: str | None = None
     latency_ms: float = 0.0
+    # From the kernel's request log when the trace is server-side: the envelope's key, the
+    # simulation it referenced, and the kernel's outcome (simulated | applied | replayed | error).
+    idempotency_key: str | None = None
+    simulation_id: str | None = None
+    outcome: str | None = None
 
 
 @dataclass

@@ -117,6 +117,22 @@ asking a human to confirm - an agent that finds the checklist green and stops fo
 before an irreversible-looking step is not wrong.
 
 If the database is down the harness stops before the first run with a message pointing here.
+
+### The step limit and outcome categories
+
+A task's `max_steps` (10-24) bounds one agent round; every round after a human status line gets a
+fresh budget. `ANERP_EVAL_STEP_FACTOR` scales it on both arms and `ANERP_EVAL_STEP_FACTOR_<SERVER>`
+(e.g. `_CONTROL`) on one; the effective limit is recorded on each row as `metrics.max_steps`. **The
+unit differs by adapter** - `max_turns` for `claude_agent_sdk` and `openai_agents_sdk`, where one
+turn may carry several parallel tool calls, and `max_llm_calls` for `google_adk`, where Gemini
+mostly issues one tool call per LLM call - so the same number is a tighter budget on Gemini and
+step-limit exhaustion is not comparable across vendors. Every run gets an `outcome_category`:
+`success`, `step_limit`, `vendor_unavailable` (503/overloaded after every retry: a dropout),
+`client_error`, `failure`; `summary.csv` carries the rate of each plus `success_rate_completed`
+(dropouts out of the denominator). `anerp eval-retry results/<run_id> --categories
+vendor_unavailable` re-runs dropouts in place. Dropouts are not necessarily random with respect to
+run length (a 503 on the 60th call removes an already long run), so report both rates.
+
 A run whose client died on a vendor rate limit is repeated from a fresh kernel after a pause
 (`ANERP_EVAL_RUN_RETRIES`, default 2); the row records `attempts`. The OpenAI adapter also
 raises its client's retries (`ANERP_OPENAI_MAX_RETRIES`, default 10, honouring `retry-after`)

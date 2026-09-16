@@ -17,6 +17,14 @@ from anerp.eval.tasks_loader import load_tasks
 def test_tasks_load() -> None:
     tasks = load_tasks()
     assert len(tasks) == 20
+    assert [t["id"] for t in load_tasks(["p2p"])] == sorted(
+        t["id"] for t in tasks if t["id"].startswith("p2p")
+    )
+    assert [t["id"] for t in load_tasks(["gl_01_manual_je", "close"])] == [
+        "close_01_clean",
+        "close_02_blocked",
+        "gl_01_manual_je",
+    ]
     assert {t["module"] for t in tasks} == {"procurement", "sales", "finance"}
     assert all(t["goal_state"] for t in tasks)
 
@@ -164,6 +172,63 @@ def test_one_of_accepts_either_close_outcome() -> None:
     trace = RunTrace(final_text="I looked at it.")
     failed = check_goal(q, task, before, trace)[0]
     assert not failed["ok"] and set(failed["actual"]) == {"closed", "asked_for_confirmation"}
+
+
+def test_step_factor_and_outcome_categories(monkeypatch) -> None:
+    from anerp.eval.metrics import outcome_category
+    from anerp.eval.runner import step_limit
+
+    task = next(t for t in load_tasks(["p2p_01_simple"]))
+    assert step_limit(task, "control") == task["max_steps"] == 24
+    monkeypatch.setenv("ANERP_EVAL_STEP_FACTOR_CONTROL", "5")
+    assert step_limit(task, "control") == 120 and step_limit(task, "treatment") == 24
+    monkeypatch.setenv("ANERP_EVAL_STEP_FACTOR", "2")
+    assert step_limit(task, "treatment") == 48 and step_limit(task, "control") == 240
+
+    assert outcome_category(True, RunTrace(error="max_steps")) == "success"
+    assert outcome_category(False, RunTrace(error="max_steps")) == "step_limit"
+    assert outcome_category(False, RunTrace(error="APIError: rate limit")) == "client_error"
+    assert (
+        outcome_category(False, RunTrace(error="ServerError: 503 UNAVAILABLE. high demand"))
+        == "vendor_unavailable"
+    )
+    assert outcome_category(False, RunTrace()) == "failure"
+    from anerp.eval.runner import _rate_limited
+
+    assert _rate_limited("APIError: Rate limit reached ... tokens per min (TPM)")
+    assert _rate_limited("ServerError: 503 UNAVAILABLE high demand") is False  # not a rate limit
+    assert not _rate_limited("429 RESOURCE_EXHAUSTED: Your prepayment credits are depleted")
+    env = Environment()
+    row = run_one(env, ScriptedClient(), "treatment", task, 1)
+    assert row["metrics"]["max_steps"] == 48 and row["metrics"]["outcome_category"] == "success"
+    summary = summarize([row])[0]
+    assert summary["step_limit_rate"] == 0.0 and summary["failure_rate"] == 0.0
+
+
+def test_eval_retry_replaces_only_matching_rows(tmp_path: Path) -> None:
+    import json
+
+    from anerp.eval.runner import retry_rows
+
+    result = run_matrix(
+        clients=["scripted"],
+        servers=["treatment"],
+        tasks=["gl_01_manual_je", "gl_03_closed_period"],
+        runs=1,
+        output_dir=str(tmp_path),
+        run_id="r",
+    )
+    raw = Path(result["raw"])
+    rows = load_raw(raw)
+    rows[0]["metrics"]["success"] = False  # pretend the vendor dropped the first run
+    rows[0]["metrics"]["outcome_category"] = "vendor_unavailable"
+    rows[0]["trace"]["error"] = "ServerError: 503 UNAVAILABLE"
+    raw.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    out = retry_rows(str(tmp_path / "r"), ["vendor_unavailable"])
+    assert out["replaced"] == 1
+    fixed = load_raw(raw)
+    assert fixed[0]["task"] == rows[0]["task"] and fixed[0]["retried_from"] == "vendor_unavailable"
+    assert fixed[0]["metrics"]["success"] and "retried_from" not in fixed[1]
 
 
 def test_seed_calendar_matches_task_placeholders() -> None:

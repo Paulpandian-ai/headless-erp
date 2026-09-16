@@ -358,6 +358,9 @@ def _server_side_trace(
                 e.get("error_code"),
                 e.get("mode") if e.get("mode") in ("simulate", "commit") else None,
                 float(e.get("latency_ms") or 0.0),
+                idempotency_key=e.get("idempotency_key"),
+                simulation_id=e.get("simulation_id"),
+                outcome=e.get("outcome"),
             )
             for e in env.agent_request_log()
         ]
@@ -366,6 +369,15 @@ def _server_side_trace(
         trace.tool_calls = recorded
     else:
         trace.extra["trace_source"] = "client (server log empty)"
+
+
+def step_limit(task: dict[str, Any], server: str) -> int:
+    """The task's `max_steps` scaled by ANERP_EVAL_STEP_FACTOR (both arms) and
+    ANERP_EVAL_STEP_FACTOR_<SERVER> (one arm). The limit is per agent round; its unit is the
+    adapter's (turns for claude_agent_sdk/openai_agents_sdk, LLM calls for google_adk)."""
+    factor = float(os.environ.get("ANERP_EVAL_STEP_FACTOR", "1"))
+    factor *= float(os.environ.get(f"ANERP_EVAL_STEP_FACTOR_{server.upper()}", "1"))
+    return max(1, int(round(int(task["max_steps"]) * factor)))
 
 
 RATE_LIMIT_MARKERS = (
@@ -379,8 +391,15 @@ RATE_LIMIT_MARKERS = (
 """Substrings of a client error that mean the vendor throttled us, not that the agent failed."""
 
 
+NOT_RETRYABLE_MARKERS = ("credits are depleted", "billing", "insufficient_quota", "credit balance")
+"""A 429 that means the account is out of money is not throttling; waiting will not help."""
+
+
 def _rate_limited(error: str | None) -> bool:
-    return any(m in (error or "").lower() for m in RATE_LIMIT_MARKERS)
+    text = (error or "").lower()
+    if any(m in text for m in NOT_RETRYABLE_MARKERS):
+        return False
+    return any(m in text for m in RATE_LIMIT_MARKERS)
 
 
 def run_one(
@@ -426,6 +445,7 @@ def _run_once(
             log.warning("reset/setup for %s failed (attempt %s); retrying", task["id"], attempt + 1)
             time.sleep(5 * (attempt + 1))
     surface = env.surface(server, over_http=bool(getattr(client, "needs_remote", False)))
+    limit = step_limit(task, server)
     if server == "control":
         from anerp.eval.crud_server import drain_call_log
 
@@ -439,9 +459,7 @@ def _run_once(
         for _ in range(int(task.get("repeat", 1))):
             _merge(
                 trace,
-                client.run(
-                    narrative, surface, max_steps=task["max_steps"], task_id=f"{task['id']}__{run}"
-                ),
+                client.run(narrative, surface, max_steps=limit, task_id=f"{task['id']}__{run}"),
             )
             rounds += 1
         for _ in range(int(task.get("max_rounds", 3)) - 1):
@@ -451,9 +469,7 @@ def _run_once(
             narrative = f"{task['narrative']} Status update: {'; '.join(updates)}. Continue from there; do not repeat what is already done."
             _merge(
                 trace,
-                client.run(
-                    narrative, surface, max_steps=task["max_steps"], task_id=f"{task['id']}__{run}"
-                ),
+                client.run(narrative, surface, max_steps=limit, task_id=f"{task['id']}__{run}"),
             )
             rounds += 1
     except Exception as exc:  # noqa: BLE001
@@ -464,6 +480,7 @@ def _run_once(
         _server_side_trace(env, server, surface, trace)
     metrics = run_metrics(q, task, before, trace, server, wall)
     metrics["rounds"] = rounds
+    metrics["max_steps"] = limit
     return {
         "server": server,
         "client": client.name,
@@ -585,3 +602,64 @@ def run_matrix(
         "backends": sorted({r["backend"] for r in rows}),
         **files,
     }
+
+
+def retry_rows(run_dir: str, categories: list[str]) -> dict[str, Any]:
+    """Re-run, in place, the rows of results/<run_id>/ whose outcome category is in
+    `categories` (e.g. vendor_unavailable: the vendor could not serve them), with the same
+    client, server, task and run number, then regenerate the outputs. Rows keep their position;
+    the replaced row records `retried_from` (the old category) and `attempts`."""
+    from anerp.eval.metrics import outcome_category
+    from anerp.eval.report import load_raw, write_outputs
+
+    path = Path(run_dir) / "raw.jsonl"
+    rows = load_raw(path)
+    tasks = {t["id"]: t for t in load_tasks()}
+    clients: dict[str, Any] = {}
+    local_env = Environment(
+        database_url=os.environ.get("ANERP_EVAL_DATABASE_URL"), agent_subject="agent:eval"
+    )
+    loopbacks: list[LoopbackMcp] = []
+    replaced = 0
+    try:
+        for i, row in enumerate(rows):
+            trace = RunTrace(error=row["trace"].get("error"))
+            category = outcome_category(bool(row["metrics"]["success"]), trace)
+            if category not in categories:
+                continue
+            client = clients.get(row["client"])
+            if client is None:
+                client = clients[row["client"]] = make_client(row["client"])
+                if not client.available():
+                    raise SystemExit(f"client {row['client']} is not available here")
+                if getattr(client, "needs_remote", False) and not loopbacks:
+                    local_env.reset()
+                    for server in sorted({r["server"] for r in rows}):
+                        lb = (
+                            treatment_loopback("agent:eval")
+                            if server == "treatment"
+                            else control_loopback()
+                        ).start()
+                        setattr(local_env, f"{server}_url", lb.url)
+                        loopbacks.append(lb)
+            log.info(
+                "retrying %s/%s/%s run %s (%s)",
+                row["server"],
+                row["client"],
+                row["task"],
+                row["run"],
+                category,
+            )
+            new = run_one(local_env, client, row["server"], tasks[row["task"]], int(row["run"]))
+            new["backend"] = local_env.backend
+            new["retried_from"] = category
+            rows[i] = new
+            replaced += 1
+            with path.open("w") as f:
+                for r in rows:
+                    f.write(json.dumps(r, default=str) + "\n")
+    finally:
+        for lb in loopbacks:
+            lb.stop()
+    files = write_outputs(Path(run_dir), rows)
+    return {"run_dir": run_dir, "replaced": replaced, **files}

@@ -1,6 +1,6 @@
 [project]
 name = "anerp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Agent-native headless ERP kernel: typed business-operation tools over MCP and A2A on a double-entry ledger."
 readme = "README.md"
 license = "Apache-2.0"

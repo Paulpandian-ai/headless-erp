@@ -391,6 +391,15 @@ Rules: approval tools (`approve_purchase_order`, `reject_approval`, `accept_good
 - Same key + same hash → return stored response with `status="replayed"` (HTTP 200, not an error).
 - Same key + different hash → `IDEMPOTENCY_CONFLICT`.
 - The idempotency record is written in the same DB transaction as the effects.
+- **Limitation (evaluation finding, 2026-09):** the key is chosen by the client, and an agent's keys are
+  not stable across sessions. In `dup_01_retry_storm` every vendor's agent, given the same instruction a
+  second time in a fresh session, minted a new content-derived key (`po-bolt-hose10m-20-20260912-01`
+  then `po-bolt-hose10m-20-20260912`, and so on) and the kernel correctly applied a second purchase
+  order. Server-enforced idempotency therefore protects a **retried envelope**, not a **repeated
+  intent**. The mechanism stays as specified. The candidate mechanism for repeated intent is
+  **intent fingerprinting** - a server-side guard on `(actor, tool, payload fingerprint)` within a
+  window, the write-side counterpart of `find_duplicates`, answering with the existing document or a
+  `DUPLICATE_INTENT` warning - marked as **future work**, not implemented.
 
 ### 8.3 Receipts
 - `before_hash` = sha256 of canonical JSON of the touched documents *before* the transaction (ids + state_versions + status + totals).
@@ -497,6 +506,13 @@ Examples:
 ### 14.3 Client adapters (`eval/clients/`)
 - `claude_agent_sdk` (Anthropic), `openai_agents_sdk`, `google_adk` — each connects to the MCP endpoint and runs the task narrative with the same neutral system prompt. AWS AgentCore is **not** executed; the README describes how a Gateway target *would* be configured from public docs only.
 - All clients run against both treatment and control servers.
+- **Step limit.** Each task's `max_steps` bounds one agent round (a fresh budget after every human
+  status line), scaled by `ANERP_EVAL_STEP_FACTOR` / `ANERP_EVAL_STEP_FACTOR_<SERVER>` and recorded
+  per row as `max_steps`. Its **unit differs by adapter**: `max_turns` for `claude_agent_sdk` and
+  `openai_agents_sdk` (one turn may carry several parallel tool calls), `max_llm_calls` for
+  `google_adk` (Gemini mostly issues one tool call per LLM call). The same number is therefore a
+  tighter budget on Gemini, and step-limit exhaustion is **not comparable across vendors**; it is
+  reported as its own outcome category and the Google cells were run at x5 so that no run is cut off.
 
 ### 14.4 Metrics (per task × client × server, ≥3 runs each)
 - **Task success** — goal-state assertions all pass.
@@ -506,6 +522,19 @@ Examples:
 - **Recovery success** — after the harness injects a failure mid-flow, does the agent reach goal state using compensating tools?
 - **Cost** — tokens in/out, tool calls, wall-clock per task.
 - **Trial balance integrity** — must be 100% on treatment; report on control.
+- **Outcome category** — one label per run: `success`, `step_limit` (budget exhausted before the goal),
+  `vendor_unavailable` (the vendor could not serve the run after every retry: 503/overloaded, a
+  dropout), `client_error` (rate limit, API rejection, transport), `failure` (finished, goal not met).
+  Success is reported both over all runs and over completed runs (dropouts removed from the
+  denominator); when the two differ by more than a couple of points the dropouts are re-run
+  (`anerp eval-retry`).
+
+**Threats to validity.** (1) Vendor dropouts are not necessarily random with respect to run length:
+a 503 that arrives on the 60th call of a long control run removes a run that was already expensive
+and possibly failing, so the completed-run rate can flatter the arm; report both and re-run dropouts.
+(2) The step limit's unit is adapter-specific (above). (3) The human loop is played by the harness
+with the task's expected quantities on both arms; on the control arm nothing posts the receipt, so
+recording it is part of what that surface costs. (4) Client-chosen idempotency keys (§8.2).
 
 Output: `results/<run_id>/raw.jsonl` + `summary.csv` + `report.md` with tables; a small script renders plots (matplotlib) for the paper.
 

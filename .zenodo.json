@@ -1,0 +1,9 @@
+{
+  "title": "anerp: an agent-native headless ERP kernel (v0.2.0, evaluation matrix)",
+  "upload_type": "software",
+  "license": "Apache-2.0",
+  "creators": [{"name": "anerp contributors"}],
+  "keywords": ["ERP", "agents", "MCP", "A2A", "double-entry ledger", "evaluation"],
+  "description": "A headless ERP kernel whose only public surface is typed business-operation tools over MCP and a task-level agent over A2A; every write is two-phase, idempotent, receipted, policy-checked and event-emitting on one double-entry ledger. This release includes the evaluation harness and the tier-matched results matrix (claude-sonnet-5, gpt-5.6-terra, gemini-3.8-flash; agent-native vs CRUD tool surface; 20 tasks x 3 runs), with the reproducibility appendix REPRODUCIBILITY.md.",
+  "access_right": "open"
+}

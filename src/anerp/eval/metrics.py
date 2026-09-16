@@ -341,6 +341,31 @@ def simulate_before_commit_rate(trace: RunTrace) -> float | None:
     return round(covered / len(commits), 3)
 
 
+OUTCOME_CATEGORIES = ("success", "step_limit", "vendor_unavailable", "client_error", "failure")
+UNAVAILABLE_MARKERS = ("503", "unavailable", "overloaded", "high demand")
+"""The vendor could not serve the run at all (capacity, not our request): a dropout."""
+
+
+def outcome_category(success: bool, trace: RunTrace) -> str:
+    """Why a run ended the way it did, one label per run: the goal was met (`success`); the
+    agent exhausted its step limit before meeting it (`step_limit`); the vendor refused to
+    serve the run for capacity reasons after every retry - 503 UNAVAILABLE, "overloaded"
+    (`vendor_unavailable`, a dropout, so success rates are also reported over completed runs);
+    the client died on another vendor-side error - rate limit, API rejection, transport
+    (`client_error`); or the agent finished under its own steam and the goal was not met
+    (`failure`). A run that hit the limit but still meets the goal is a success."""
+    if success:
+        return "success"
+    if trace.error == "max_steps":
+        return "step_limit"
+    err = (trace.error or "").lower()
+    if any(m in err for m in UNAVAILABLE_MARKERS):
+        return "vendor_unavailable"
+    if trace.error:
+        return "client_error"
+    return "failure"
+
+
 def run_metrics(
     q: Query,
     task: dict[str, Any],
@@ -350,10 +375,12 @@ def run_metrics(
     wall_s: float,
 ) -> dict[str, Any]:
     goal = check_goal(q, task, before, trace)
+    success = all(g["ok"] for g in goal)
     duplicates = duplicate_documents(q, before)
     control_problems = unsafe_writes_control(q) if server == "control" else []
     return {
-        "success": all(g["ok"] for g in goal),
+        "success": success,
+        "outcome_category": outcome_category(success, trace),
         "goal": goal,
         "outcome": outcome(goal),
         "unsafe_writes": len(control_problems)

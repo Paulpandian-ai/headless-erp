@@ -46,9 +46,12 @@ def _sub(value: Any, vars_: dict[str, str]) -> Any:
 def load_tasks(ids: list[str] | None = None, today: date | None = None) -> list[dict[str, Any]]:
     vars_ = placeholders(today)
     tasks = []
+    known = {path.stem for path in TASK_DIR.glob("*.yaml")}
+    # An id that names no task is a prefix: `p2p` selects every p2p_* task.
+    prefixes = [i for i in (ids or []) if i not in known]
     for path in sorted(TASK_DIR.glob("*.yaml")):
         data = yaml.safe_load(path.read_text())
-        if ids and data["id"] not in ids:
+        if ids and data["id"] not in ids and not any(data["id"].startswith(p) for p in prefixes):
             continue
         data = _sub(data, vars_)
         data["narrative"] = " ".join(str(data["narrative"]).split())

@@ -289,5 +289,19 @@ def eval_merge_cmd(
     _print({"run_id": run_id, "runs": len(rows), "inputs": inputs, **write_outputs(run_dir, rows)})
 
 
+@app.command("eval-retry")
+def eval_retry_cmd(
+    run_dir: str = typer.Argument(..., help="results/<run_id>/ to repair in place"),
+    categories: str = typer.Option(
+        "vendor_unavailable", help="Comma-separated outcome categories to re-run"
+    ),
+) -> None:
+    """Re-run the rows of a results directory whose outcome category matches (default: the
+    vendor could not serve them) with the same client/server/task/run, and regenerate outputs."""
+    from anerp.eval.runner import retry_rows
+
+    _print(retry_rows(run_dir, [c.strip() for c in categories.split(",")]))
+
+
 if __name__ == "__main__":
     app()
