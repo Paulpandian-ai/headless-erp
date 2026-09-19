@@ -11,7 +11,7 @@ them and how to produce them again.
 | Release | `v0.2.0` (git tag), GitHub release of the same name |
 | Commit | the head of `main` the `v0.2.0` tag points at (`git rev-parse v0.2.0^{}`); every result in `results/`, the resilience experiments included, was produced by the commits listed per run below, all ancestors of it |
 | Repository | https://github.com/Paulpandian-ai/headless-erp |
-| Archive / DOI | Zenodo record minted from the GitHub release once the repository is enabled in Zenodo; until `CITATION.cff` carries a `doi:` line, cite the tag and commit |
+| Archive / DOI | Zenodo: https://doi.org/10.5281/zenodo.22848738 (release v0.2.0); concept DOI for all versions https://doi.org/10.5281/zenodo.22848737 |
 | License | Apache-2.0 |
 
 ## Models

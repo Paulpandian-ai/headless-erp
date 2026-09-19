@@ -246,4 +246,4 @@ in CI with `ANERP_DATABASE_URL` set.
 
 ## License and citation
 
-Apache-2.0. See [CITATION.cff](CITATION.cff).
+Apache-2.0. See [CITATION.cff](CITATION.cff). Release v0.2.0 is archived on Zenodo: [10.5281/zenodo.22848738](https://doi.org/10.5281/zenodo.22848738) (concept DOI for all versions: [10.5281/zenodo.22848737](https://doi.org/10.5281/zenodo.22848737)).

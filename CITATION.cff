@@ -6,7 +6,14 @@ date-released: 2026-09-16
 license: Apache-2.0
 repository-code: "https://github.com/Paulpandian-ai/headless-erp"
 url: "https://github.com/Paulpandian-ai/headless-erp"
-# doi: filled in from the Zenodo record minted for the v0.2.0 GitHub release
+doi: 10.5281/zenodo.22848738
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22848738
+    description: "Zenodo archive of release v0.2.0"
+  - type: doi
+    value: 10.5281/zenodo.22848737
+    description: "Zenodo concept DOI (all versions)"
 abstract: >
   A headless ERP kernel with no user interface whose only public surface is a set of
   typed business-operation tools over the Model Context Protocol and a task-level agent
