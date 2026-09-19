@@ -1,0 +1,90 @@
+{
+ "experiment": "stale_writes",
+ "trials": [
+  {
+   "arm": "treatment",
+   "scenario": "stock_consumed",
+   "tool": "ship_order",
+   "simulate": "simulated",
+   "interference": "applied",
+   "commit_with_simulation": "STALE_SIMULATION",
+   "commit_with_simulation_message": "state changed since simulation; re-simulate",
+   "resimulate": "INSUFFICIENT_STOCK",
+   "touched_rows_in_simulation": 0,
+   "tb_balanced": true,
+   "commit_without_simulation": "INSUFFICIENT_STOCK"
+  },
+  {
+   "arm": "control",
+   "scenario": "stock_consumed",
+   "posting_correct": false,
+   "detail": "8 units shipped against 5 on hand; item row shows 0 (true: -3)",
+   "post_hoc_checker_flags": [],
+   "tb_balanced": true
+  },
+  {
+   "arm": "treatment",
+   "scenario": "period_closed",
+   "tool": "post_journal_entry",
+   "simulate": "simulated",
+   "interference": "applied",
+   "commit_with_simulation": "STALE_SIMULATION",
+   "commit_with_simulation_message": "state changed since simulation; re-simulate",
+   "resimulate": "PERIOD_CLOSED",
+   "touched_rows_in_simulation": 0,
+   "tb_balanced": true,
+   "commit_without_simulation": "PERIOD_CLOSED"
+  },
+  {
+   "arm": "control",
+   "scenario": "period_closed",
+   "posting_correct": false,
+   "detail": "1 entry posted into closed period 2026-08",
+   "post_hoc_checker_flags": [],
+   "tb_balanced": true
+  },
+  {
+   "arm": "treatment",
+   "scenario": "po_already_invoiced",
+   "tool": "post_supplier_invoice",
+   "simulate": "simulated",
+   "interference": "applied",
+   "commit_with_simulation": "STALE_SIMULATION",
+   "commit_with_simulation_message": "state changed since simulation; re-simulate",
+   "resimulate": "MATCH_VARIANCE_EXCEEDED",
+   "touched_rows_in_simulation": 0,
+   "tb_balanced": true,
+   "commit_without_simulation": "MATCH_VARIANCE_EXCEEDED"
+  },
+  {
+   "arm": "control",
+   "scenario": "po_already_invoiced",
+   "posting_correct": false,
+   "detail": "8 units invoiced against 4 received; PO line shows invoiced_qty 4; GR/IR 1400 net 20000 cents",
+   "post_hoc_checker_flags": [],
+   "tb_balanced": true
+  },
+  {
+   "arm": "treatment",
+   "scenario": "credit_limit_consumed",
+   "tool": "create_sales_order",
+   "simulate": "simulated",
+   "interference": "applied",
+   "commit_with_simulation": "CREDIT_LIMIT_EXCEEDED",
+   "commit_with_simulation_message": "customer_credit_limit: exposure after this document 560000 cents exceeds credit limit 500000 cents",
+   "resimulate": "CREDIT_LIMIT_EXCEEDED",
+   "touched_rows_in_simulation": 0,
+   "tb_balanced": true,
+   "commit_without_simulation": "CREDIT_LIMIT_EXCEEDED"
+  },
+  {
+   "arm": "control",
+   "scenario": "credit_limit_consumed",
+   "posting_correct": false,
+   "detail": "open AR 160000 + open orders 400000 = 560000 cents against limit 500000",
+   "post_hoc_checker_flags": [],
+   "tb_balanced": true
+  }
+ ],
+ "summary_md": "| scenario | treatment: commit with simulation | re-simulate says | commit without simulation | control: posting correct? | control detail | post-hoc checker |\n|---|---|---|---|---|---|---|\n| stock_consumed | STALE_SIMULATION | INSUFFICIENT_STOCK | INSUFFICIENT_STOCK | NO | 8 units shipped against 5 on hand; item row shows 0 (true: -3) | nothing flagged |\n| period_closed | STALE_SIMULATION | PERIOD_CLOSED | PERIOD_CLOSED | NO | 1 entry posted into closed period 2026-08 | nothing flagged |\n| po_already_invoiced | STALE_SIMULATION | MATCH_VARIANCE_EXCEEDED | MATCH_VARIANCE_EXCEEDED | NO | 8 units invoiced against 4 received; PO line shows invoiced_qty 4; GR/IR 1400 net 20000 cents | nothing flagged |\n| credit_limit_consumed | CREDIT_LIMIT_EXCEEDED | CREDIT_LIMIT_EXCEEDED | CREDIT_LIMIT_EXCEEDED | NO | open AR 160000 + open orders 400000 = 560000 cents against limit 500000 | nothing flagged |"
+}

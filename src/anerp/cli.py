@@ -303,5 +303,63 @@ def eval_retry_cmd(
     _print(retry_rows(run_dir, [c.strip() for c in categories.split(",")]))
 
 
+@app.command("eval-resilience")
+def eval_resilience_cmd(
+    experiment: str = typer.Argument(..., help="commit-failure | timeout | stale-writes"),
+    clients: str = typer.Option(
+        "claude_agent_sdk,openai_agents_sdk,google_adk", help="timeout: adapters to run"
+    ),
+    tasks: str = typer.Option(
+        "", help="timeout: comma-separated task ids (default: the experiment's set)"
+    ),
+    runs: int = typer.Option(3, help="timeout: runs per client x task"),
+    output: str = typer.Option("results/resilience"),
+) -> None:
+    """Resilience experiments (results/resilience/): deterministic commit-failure and stale-write
+    sweeps, and the agent-in-the-loop timeout/duplicates experiment."""
+    import os
+    from pathlib import Path
+
+    if experiment == "commit-failure":
+        from anerp.eval.resilience.commit_failure import run
+
+        result = run(os.environ.get("ANERP_EVAL_DATABASE_URL"))
+        d = Path(output) / "commit_failure"
+        d.mkdir(parents=True, exist_ok=True)
+        name = "sqlite" if result["trials"][0]["backend"] == "sqlite" else "postgres"
+        (d / f"{name}.json").write_text(json.dumps(result, indent=1, default=str))
+        _print(
+            {
+                "all_pass": result["all_pass"],
+                "trials": len(result["trials"]),
+                "file": str(d / f"{name}.json"),
+            }
+        )
+    elif experiment == "timeout":
+        from anerp.eval.resilience.timeout_duplicates import run as run_timeout
+        from anerp.eval.resilience.timeout_duplicates import summarize
+
+        result = run_timeout(
+            [c.strip() for c in clients.split(",")],
+            [t.strip() for t in tasks.split(",")] if tasks else None,
+            runs,
+            str(Path(output) / "timeout_duplicates"),
+        )
+        summary = summarize(Path(result["raw"]))
+        (Path(output) / "timeout_duplicates" / "summary.md").write_text(summary + "\n")
+        typer.echo(summary)
+        _print(result)
+    elif experiment == "stale-writes":
+        from anerp.eval.resilience.stale_writes import run as run_stale
+
+        result = run_stale(os.environ.get("ANERP_EVAL_DATABASE_URL"))
+        d = Path(output) / "stale_writes"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "trials.json").write_text(json.dumps(result, indent=1, default=str))
+        typer.echo(result["summary_md"])
+    else:
+        raise typer.BadParameter("experiment must be commit-failure, timeout or stale-writes")
+
+
 if __name__ == "__main__":
     app()
