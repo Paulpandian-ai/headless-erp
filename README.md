@@ -127,12 +127,19 @@ in demo and prod, where the origin has to be named.
 | AWS Bedrock AgentCore | MCP streamable HTTP (Gateway) | **not executed** — see below | described only |
 
 **AWS AgentCore (description from public documentation only; nothing is run or hosted on AWS).**
-Amazon Bedrock AgentCore Gateway can front an existing MCP server as a "target": you register the
-anerp endpoint URL and the outbound authorization (an API-key/bearer credential stored in the
-Gateway's credential provider), the Gateway then lists anerp's tools to AgentCore Runtime agents
-and forwards `tools/call` with the configured `Authorization` header. Because anerp is stateless
+Amazon Bedrock AgentCore Gateway accepts an existing remote MCP server as a "target": you register
+the server's URL and an outbound authorization, for which the documented options are none, OAuth
+(client credentials, authorization code, or token exchange), IAM SigV4 (only for targets behind
+an AWS service that verifies SigV4) and an API key held by an AgentCore Identity credential
+provider, delivered as a header or query parameter with a configurable parameter name and prefix
+(`credentialLocation: HEADER`, `credentialParameterName`, `credentialPrefix`, i.e.
+`Authorization: Bearer <key>`). The Gateway indexes the target's tools with `tools/list` when the
+target is created or synchronized (`SynchronizeGatewayTargets`) and exposes them to its MCP
+clients, AgentCore Runtime agents among them, forwarding `tools/call` with that credential. The
+Gateway supports MCP protocol versions 2025-03-26 through 2026-07-28. Because anerp is stateless
 over streamable HTTP and authenticates per request, the same `anerp_…` token an admin mints with
-`mint_token` would be the outbound credential. This project does not include AWS code,
+`mint_token` would be the API-key credential (source: AWS docs, "MCP servers targets" and
+"Specify the authorization type and credentials to access the gateway target", read 2026-09-19). This project does not include AWS code,
 dependencies or infrastructure (conflict-of-interest boundary, DESIGN.md §16).
 
 ## Human in the loop

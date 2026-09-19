@@ -78,8 +78,7 @@ roughly 60-90 s per run.
 
 Models are pinned per adapter and recorded on every row (`model` in `raw.jsonl` and
 `summary.csv`): `ANERP_ANTHROPIC_MODEL`, `ANERP_OPENAI_MODEL`, `ANERP_GOOGLE_MODEL`. The local
-defaults are each vendor's strongest tier (`claude-opus-5`, `gpt-5`, `gemini-3.1-pro-preview`;
-`gemini-2.5-pro` is retired for new users).
+defaults are each vendor's strongest tier (`claude-opus-5`, `gpt-5`, `gemini-3.1-pro-preview`).
 
 ## The matrix on GitHub Actions
 
@@ -160,8 +159,9 @@ request to raise, not because the script got it wrong.
 
 ## google-adk
 
-`google-adk` depends on `mcp` 1.x while anerp runs on `mcp` 2.x, so the ADK loop runs as a
-subprocess (`clients/google_adk_worker.py`, no anerp imports) under its own interpreter:
+`google-adk`'s MCP support (its `mcp` extra, which `MCPToolset` needs; `google-adk` 2.9.x
+declares `mcp>=1.24,<2` for that extra) is incompatible with the `mcp` 2.x anerp runs on, so the
+ADK loop runs as a subprocess (`clients/google_adk_worker.py`, no anerp imports) under its own interpreter:
 `.venv-adk/bin/python` by default, or `ANERP_GOOGLE_ADK_PYTHON`. The worker runs with `-P`
 because `clients/http.py` would otherwise shadow the standard library's `http` package.
 
