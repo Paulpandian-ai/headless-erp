@@ -9,7 +9,7 @@ them and how to produce them again.
 | | |
 |---|---|
 | Release | `v0.2.0` (git tag), GitHub release of the same name |
-| Commit | `a64ca22` on `main`, the commit the `v0.2.0` tag points at (`git rev-parse v0.2.0^{}`); every result in `results/`, the resilience experiments included, was produced by the commits listed per run below, all ancestors of it |
+| Commit | `5902698` on `main`, the commit the `v0.2.0` tag points at (`git rev-parse v0.2.0^{}`); every result in `results/`, the resilience experiments included, was produced by the commits listed per run below, all ancestors of it |
 | Repository | https://github.com/Paulpandian-ai/headless-erp |
 | Archive / DOI | Zenodo record minted from the GitHub release once the repository is enabled in Zenodo; until `CITATION.cff` carries a `doi:` line, cite the tag and commit |
 | License | Apache-2.0 |
