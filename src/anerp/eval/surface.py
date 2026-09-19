@@ -158,14 +158,16 @@ class LoopbackMcp:
         return RemoteSurface(self.url, "none", name=self.name)
 
 
-def treatment_loopback(actor_id: str = "agent:eval") -> LoopbackMcp:
-    """The agent-native surface, bound to the same scoped agent principal TreatmentSurface uses."""
+def treatment_loopback(actor_id: str = "agent:eval", call_hook: Any = None) -> LoopbackMcp:
+    """The agent-native surface, bound to the same scoped agent principal TreatmentSurface uses.
+    `call_hook(name, args, result)` may replace what the client sees (fault injection)."""
     from anerp.mcp_server.app import build_server
 
     principal = Principal(subject=actor_id, kind="agent", scopes=EVAL_AGENT_SCOPES)
     server = build_server(
         stdio_principal=principal,
         tool_filter=lambda name: not name.startswith(HIDDEN_FROM_AGENTS),
+        call_hook=call_hook,
     )
     return LoopbackMcp(server, "treatment")
 

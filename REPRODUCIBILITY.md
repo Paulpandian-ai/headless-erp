@@ -9,9 +9,9 @@ them and how to produce them again.
 | | |
 |---|---|
 | Release | `v0.2.0` (git tag), GitHub release of the same name |
-| Commit | the commit the `v0.2.0` tag points at (`git rev-parse v0.2.0`); the results in `results/` were produced by the commits listed per run below, all ancestors of it |
+| Commit | the commit the `v0.2.0` tag points at (`git rev-parse v0.2.0`); the matrix results in `results/` were produced by the commits listed per run below, all ancestors of it. The resilience experiments (`results/resilience/`, `anerp eval-resilience`) came after the tag: use branch `eval/same-kernel-matrix` at `c3c3248` or later for those |
 | Repository | https://github.com/Paulpandian-ai/headless-erp |
-| Archive / DOI | Zenodo, minted from the GitHub release - see `CITATION.cff` |
+| Archive / DOI | Zenodo record minted from the GitHub release once the repository is enabled in Zenodo; until `CITATION.cff` carries a `doi:` line, cite the tag and commit |
 | License | Apache-2.0 |
 
 ## Models
@@ -45,6 +45,7 @@ the same neutral text for every adapter (`clients/base.py:NEUTRAL_SYSTEM_PROMPT`
 | `claude-both-arms-1run` (40 rows) | Codespace, `anerp eval --clients claude_agent_sdk` | 2026-09-12 | `3fb5c6b` |
 | `scripted-both-arms-codespace-pg` (120 rows) | Codespace, `anerp eval --clients scripted` | 2026-09-11 | `e392bae` |
 | `dup01-keys` (3 rows) | Codespace, `dup_01_retry_storm` on treatment, keys captured | 2026-09-12 | `3d0493d`+ |
+| `resilience/` (commit failure 48 trials x 2 backends; stale writes 8 trials x 2 backends; timeout/duplicates 44 agent runs) | Codespace, `anerp eval-resilience {commit-failure,stale-writes,timeout}`; SQLite in memory and PostgreSQL 17.11 | 2026-09-16 to 2026-09-19 | `c3c3248` |
 
 Environment for the Actions runs: `ubuntu-latest`, Python 3.12 via `uv`, a `postgres:17`
 service container per job, one job per vendor with the two arms run one after the other.
@@ -82,16 +83,33 @@ Policies are `policies/default.yaml` (PO approval threshold 10,000.00; price tol
 
 ## How to re-run
 
+Prerequisites on a clean machine: `git`, `uv` (https://docs.astral.sh/uv/), a PostgreSQL server
+you can reach, and API keys for the vendors you intend to run. Nothing else: no `ANERP_*`
+variables beyond the ones exported below (`ANERP_ENV` is not needed), no `psql`, no Docker
+unless you use it for the database. A fresh Codespace from this repository already has `uv`,
+the two virtual environments and `ANERP_EVAL_DATABASE_URL` from `.devcontainer/devcontainer.json`,
+but **no database server**: the URL points at 127.0.0.1:5432 and nothing listens there.
+
 ```bash
+git clone https://github.com/Paulpandian-ai/headless-erp && cd headless-erp
 git checkout v0.2.0
 uv sync --all-extras --dev
 uv venv .venv-adk --python 3.12 && uv pip install --python .venv-adk/bin/python google-adk "mcp<2"
-export ANERP_EVAL_DATABASE_URL=postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval   # any Postgres
-export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GOOGLE_API_KEY=...
+
+# a Postgres to run against - one of:
+docker compose up -d --wait                       # (a) the repo's compose file: Postgres 17 on 127.0.0.1:5432, user/db anerp/anerp_eval
+#   sudo apt-get install -y postgresql && sudo -u postgres psql -c "CREATE USER anerp WITH PASSWORD 'anerp';" -c "CREATE DATABASE anerp_eval OWNER anerp;"   # (b) a package install
+#   or (c) any hosted Postgres: create an empty database and a role that owns it
+export ANERP_EVAL_DATABASE_URL=postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval   # the harness creates the schema and wipes the database before every run
+
+export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GOOGLE_API_KEY=...   # only for the vendors you run; Google needs a paid-tier project
 export ANERP_ANTHROPIC_MODEL=claude-sonnet-5 ANERP_OPENAI_MODEL=gpt-5.6-terra ANERP_GOOGLE_MODEL=gemini-3.8-flash
 
-# model-free checks (no cost)
+# model-free checks (no cost, ~45 s): expect treatment 20/20, control 19/20
 uv run --all-extras anerp eval --clients scripted --servers treatment,control --run-id oracle
+
+# cheapest end-to-end check of a vendor before spending on the matrix (one task, both arms, ~$0.50)
+uv run --all-extras anerp eval --clients claude_agent_sdk --servers treatment,control --runs 1 --tasks gl_01_manual_je --run-id smoke
 
 # one vendor, both arms, 3 runs (run vendors one at a time: a vendor's arms in parallel trip its TPM limit)
 uv run --all-extras anerp eval --clients claude_agent_sdk --servers treatment,control --runs 3 --run-id claude
@@ -111,7 +129,20 @@ Numbers will not reproduce bit-for-bit: the models are non-deterministic, vendor
 varies (Gemini 503s, tokens-per-minute limits), and the calendar is relative to the date. The
 reference points that are deterministic - the scripted oracle's success (treatment 20/20, control
 19/20), its tool-call counts, and per-call latency ordering (treatment 5-7 ms median vs control
-1.5-2 ms) - should.
+1-2.5 ms, measured on loopback Postgres 17) - should. The oracle's control-arm call count is
+~26 per run from `b5faa1b` on (it waits for the warehouse status line like the agents do);
+the committed `scripted-both-arms-codespace-pg` run predates that and shows 25.
+
+## Clean-machine check (2026-09-19)
+
+The procedure above was followed on a fresh clone at `v0.2.0` with a scrubbed environment (no
+`ANERP_*` variables except the exported ones, fresh virtual environments, a new empty database)
+in this order: sync, ADK venv, oracle run (117/120, 43 s), one-task runs of `claude_agent_sdk`
+and `openai_agents_sdk` (2/2 each), the `google_adk` command (ran; the project was refused by
+Google with 403 that day), `eval-merge`, `eval-retry`. Every command worked as written. What the
+document had assumed without saying, now stated above: that a Postgres server exists at the URL
+(a fresh Codespace has none), that a cheap smoke command exists, that `ANERP_ENV` is not needed,
+that the Zenodo DOI is not yet minted, and that the resilience experiments live after the tag.
 
 ## Threats to validity
 

@@ -49,9 +49,12 @@ def build_server(
     *,
     stdio_principal: Principal | None = None,
     tool_filter: Callable[[str], bool] | None = None,
+    call_hook: Callable[[str, dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Server[Any]:
     """`stdio_principal` binds every call to one principal (stdio transport, or a loopback
-    server the eval harness runs in-process); `tool_filter` hides tools from the listing."""
+    server the eval harness runs in-process); `tool_filter` hides tools from the listing;
+    `call_hook(name, arguments, result)` may replace the result the client sees after the
+    kernel has processed the call (the eval harness injects transport faults with it)."""
 
     async def on_list_tools(ctx: Any, params: Any) -> types.ListToolsResult:
         tools = mcp_tools()
@@ -62,6 +65,8 @@ def build_server(
     async def on_call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
         principal = stdio_principal or _principal(ctx)
         result = await anyio.to_thread.run_sync(call_tool, params.name, params.arguments, principal)
+        if call_hook is not None:
+            result = call_hook(params.name, params.arguments or {}, result)
         return to_result(result)
 
     async def on_list_resources(ctx: Any, params: Any) -> types.ListResourcesResult:
