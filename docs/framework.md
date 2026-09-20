@@ -127,4 +127,33 @@ Every assertion in this document about what a commercial system does or does not
 
 Silence in vendor documentation is not evidence of a missing capability. Where the public docs do not address write semantics, idempotency, or approval routing, say so explicitly rather than inferring a gap.
 
-TODO — the verification table, once the pass has run.
+### 9.1 Verification pass of 2026-09-20 — blocked on placeholders
+
+Run against this file at commit `ea512f4`. The sections that would carry claims about commercial
+systems — §2.2 (tier assignments), §3 (posture descriptions), §4 (readiness dimensions), §5, §6 —
+are `TODO` (26 placeholders in the file). Per the provenance note, nothing in them was
+reconstructed or verified. **No assertion about what a named or unnamed commercial system does or
+does not support is present in the document yet**, so the verification table below is a
+placeholder for the pass to be re-run once the prose is in. What could be checked, was:
+
+| # | location | claim | source | exact supporting text | verdict |
+|---|---|---|---|---|---|
+| F1 | §3, Posture 4 | "System of record plus authoritative control plane — the near-term incumbent-estate architecture" | — | — | **pending**: a general architectural assertion with no description yet; when §3 is filled it needs at least one named public example of a control plane layered over an incumbent system of record (e.g. an iPaaS or agent gateway fronting an ERP) to be *supported-named*, otherwise it must be softened to *supported-general* ("a plausible near-term architecture") |
+| F2 | §8 | Anderson, *Computer Security Technology Planning Study*, ESD-TR-73-51, 1972 | https://csrc.nist.gov/files/pubs/conference/1998/10/08/proceedings-of-the-21st-nissc-1998/final/docs/early-cs-papers/ande72a.pdf; https://seclab.cs.ucdavis.edu/projects/history/seminal.html | "ESD-TR-73-51, ESD/AFSC, Hanscom AFB, Bedford, MA (Oct. 1972)" | **supported-named** (bibliographic; the report introduces the reference monitor, the origin of complete mediation) |
+| F3 | §8 | Saltzer and Schroeder, "The Protection of Information in Computer Systems," *Proc. IEEE* 63(9), 1975 | https://web.mit.edu/Saltzer/www/publications/protection/Basic.html; https://www.scirp.org/reference/referencespapers?referenceid=401690 | "Complete mediation: Every access to every object must be checked for authority." — "Proceedings of the IEEE, Vol. 63, No. 9, 1975, pp. 1278-1308. doi 10.1109/PROC.1975.9939" | **supported-named**; add pp. 1278–1308 and the DOI to the reference |
+| F4 | §8 (proposed) | Parasuraman and Riley, 1997, for automation complacency | https://journals.sagepub.com/doi/10.1518/001872097778543886 | "Humans and Automation: Use, Misuse, Disuse, Abuse", *Human Factors* 39(2), June 1997, pp. 230–253 | **supported-named** for the citation; whether it supports the Section V observability finding depends on that finding's wording, which is not in this document |
+
+The four platform claims verified on 2026-09-19 live in the repository's own documentation, not
+in this framework, and were handled there (README, `src/anerp/eval/README.md`, DESIGN.md §12;
+commit `56f45c5`). Mapped onto this document's vocabulary: AgentCore Gateway targets and outbound
+API-key authorization — *needs-narrowing*, applied; `google-adk`'s `mcp<2` pin — *needs-narrowing*
+(the pin is on the `mcp` extra), applied; "gemini-2.5-pro is retired for new users" — *drop*,
+applied; Claude Code ignoring a configured bearer header in favour of OAuth — *drop* (current
+documentation states the opposite), applied. Any of these that the framework's filled sections
+repeat should reuse those verdicts and sources rather than re-asserting the original wording.
+
+**To re-run the pass:** fill the `TODO` sections, then for every row or sentence that asserts
+what a commercial system supports, add a line to the table above with the four-verdict scoring
+from §9. Where a vendor's public documentation does not address write semantics, idempotency or
+approval routing, record "docs silent" in the *exact supporting text* column and do not score the
+claim as a gap.
