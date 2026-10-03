@@ -249,5 +249,5 @@ in CI with `ANERP_DATABASE_URL` set.
 Apache-2.0. See [CITATION.cff](CITATION.cff). Archived on Zenodo — cite the concept DOI
 [10.5281/zenodo.22848737](https://doi.org/10.5281/zenodo.22848737), which resolves to the latest
 version, or a version DOI if you need a specific one: v0.2.1
-PENDING_V021_DOI, v0.2.0
+[10.5281/zenodo.23122991](https://doi.org/10.5281/zenodo.23122991), v0.2.0
 [10.5281/zenodo.22848738](https://doi.org/10.5281/zenodo.22848738).

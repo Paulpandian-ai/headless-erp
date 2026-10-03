@@ -11,7 +11,7 @@ them and how to produce them again.
 | Release | `v0.2.1` (git tag), GitHub release of the same name. `v0.2.0` is the release the matrix and resilience results were produced under; `v0.2.1` adds the framework verification pass, the pre-publication validation record and the harness guard that came out of it, and changes no result |
 | Commit | the head of `main` the `v0.2.1` tag points at (`git rev-parse v0.2.1^{}`); the results were produced at `v0.2.0` (`1024788`), an ancestor of it; every result in `results/`, the resilience experiments included, was produced by the commits listed per run below, all ancestors of it |
 | Repository | https://github.com/Paulpandian-ai/headless-erp |
-| Archive / DOI | Zenodo concept DOI, always the latest version: https://doi.org/10.5281/zenodo.22848737. Version DOIs: v0.2.0 https://doi.org/10.5281/zenodo.22848738; v0.2.1 PENDING_V021_DOI |
+| Archive / DOI | Zenodo concept DOI, always the latest version: https://doi.org/10.5281/zenodo.22848737. Version DOIs: v0.2.0 https://doi.org/10.5281/zenodo.22848738; v0.2.1 https://doi.org/10.5281/zenodo.23122991 |
 | License | Apache-2.0 |
 
 ## Models

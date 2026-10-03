@@ -12,6 +12,9 @@ identifiers:
     value: 10.5281/zenodo.22848737
     description: "Zenodo concept DOI - resolves to the latest version; cite this unless you need a specific one"
   - type: doi
+    value: 10.5281/zenodo.23122991
+    description: "Zenodo archive of release v0.2.1"
+  - type: doi
     value: 10.5281/zenodo.22848738
     description: "Zenodo archive of release v0.2.0"
 abstract: >
