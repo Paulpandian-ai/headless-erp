@@ -8,10 +8,10 @@ them and how to produce them again.
 
 | | |
 |---|---|
-| Release | `v0.2.0` (git tag), GitHub release of the same name |
-| Commit | the head of `main` the `v0.2.0` tag points at (`git rev-parse v0.2.0^{}`); every result in `results/`, the resilience experiments included, was produced by the commits listed per run below, all ancestors of it |
+| Release | `v0.2.1` (git tag), GitHub release of the same name. `v0.2.0` is the release the matrix and resilience results were produced under; `v0.2.1` adds the framework verification pass, the pre-publication validation record and the harness guard that came out of it, and changes no result |
+| Commit | the head of `main` the `v0.2.1` tag points at (`git rev-parse v0.2.1^{}`); the results were produced at `v0.2.0` (`1024788`), an ancestor of it; every result in `results/`, the resilience experiments included, was produced by the commits listed per run below, all ancestors of it |
 | Repository | https://github.com/Paulpandian-ai/headless-erp |
-| Archive / DOI | Zenodo: https://doi.org/10.5281/zenodo.22848738 (release v0.2.0); concept DOI for all versions https://doi.org/10.5281/zenodo.22848737 |
+| Archive / DOI | Zenodo concept DOI, always the latest version: https://doi.org/10.5281/zenodo.22848737. Version DOIs: v0.2.0 https://doi.org/10.5281/zenodo.22848738; v0.2.1 PENDING_V021_DOI |
 | License | Apache-2.0 |
 
 ## Models
@@ -113,7 +113,7 @@ nothing restarts it after the machine or Codespace is restarted.
 
 ```bash
 git clone https://github.com/Paulpandian-ai/headless-erp && cd headless-erp
-git checkout v0.2.0
+git checkout v0.2.1          # or v0.2.0 for the exact tree the results were produced under
 uv sync --all-extras --dev
 uv venv .venv-adk --python 3.12 && uv pip install --python .venv-adk/bin/python google-adk "mcp<2"
 
