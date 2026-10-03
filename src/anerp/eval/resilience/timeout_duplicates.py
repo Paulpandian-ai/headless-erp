@@ -149,6 +149,14 @@ def run(
     env.treatment_url = lb.url
     rows: list[dict[str, Any]] = []
     raw = out / "raw.jsonl"
+    if raw.exists() and raw.stat().st_size:
+        # The committed results live at this path. Appending to them would mix a re-run's rows
+        # into the published file with no way to tell them apart, so refuse and say what to do.
+        raise SystemExit(
+            f"{raw} already has rows (the published results are committed there). "
+            "Re-run into a different directory, e.g. --output results/resilience-rerun, "
+            "or move the existing file aside first."
+        )
     try:
         with raw.open("a") as f:
             for name in clients:

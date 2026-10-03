@@ -26,8 +26,21 @@ of `raw.jsonl` (`model`) and in `summary.csv`.
 | `google_adk` | `google-adk` 2.9.0 in its own interpreter | `gemini-3.8-flash` | mid | $0.75 / $0.075 / $3.75 |
 | `claude_agent_sdk` (reference run only) | | `claude-opus-5` | strongest | $5.00 / $0.50 / $25.00 |
 
-Tier matching: each vendor's current-generation mid-tier model. `gpt-5-mini` and
-`gemini-2.5-flash` were considered and rejected as previous-generation. All three run with the
+**Model availability, re-checked 2026-10-03.** All three pinned ids are still served and their
+list prices are unchanged, so the published matrix remains reproducible exactly as pinned:
+`claude-sonnet-5` and `claude-opus-5` are both still listed by the Anthropic models endpoint;
+`gpt-5.6-terra` is still listed and still $2.00 / $0.20 cached / $12.00; `gemini-3.8-flash` is
+still listed and still $0.75 / $0.075 / $3.75 — with a published increase to $1.50 / $0.15 / $7.50
+from 1 January 2027, so a re-run after that date costs about twice as much on the Google cells.
+Two vendors have since shipped newer generations: Anthropic released Claude Sonnet 5.5
+(2026-09-28) and Claude Opus 5.5 (2026-09-21), and OpenAI's pricing page now lists a GPT-6 family
+(`gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`). The matrix is **not** re-run for those:
+its tier matching is stated as of the run date, and a future tier-matched run would have to decide
+the mid-tier of each vendor's then-current generation afresh. Google's `gemini-3.8-flash` remains
+the current Flash-line model.
+
+Tier matching: each vendor's current-generation mid-tier model *as of the run date*. `gpt-5-mini`
+and `gemini-2.5-flash` were considered and rejected as previous-generation. All three run with the
 vendors' default sampling and thinking settings through their own agent SDKs; the harness sets
 no temperature, effort or thinking parameters (`src/anerp/eval/clients/`). The system prompt is
 the same neutral text for every adapter (`clients/base.py:NEUTRAL_SYSTEM_PROMPT`).
@@ -61,7 +74,9 @@ date-relative calendar (`seed.baseline_periods`): the month before last is close
 (which holds the opening entries) and this month are open. For the runs above (September 2026)
 that is 2026-07 closed, 2026-08 and 2026-09 open, opening entries dated 2026-08-01. Tasks refer
 to the calendar through placeholders (`{previous_period}`, `{closed_period}`, ...), so a re-run
-in another month closes a different period but the same *kind* of period.
+in another month closes a different period but the same *kind* of period. Confirmed by the
+October 2026 validation re-run: the same task set exercised 2026-08 as the closed period and
+2026-09 as the month to close, and every goal check still passed.
 
 Policies are `policies/default.yaml` (PO approval threshold 10,000.00; price tolerance 2 % or
 50.00; credit limit per customer). The twenty tasks are `src/anerp/eval/tasks/*.yaml`.
@@ -85,10 +100,16 @@ Policies are `policies/default.yaml` (PO approval threshold 10,000.00; price tol
 
 Prerequisites on a clean machine: `git`, `uv` (https://docs.astral.sh/uv/), a PostgreSQL server
 you can reach, and API keys for the vendors you intend to run. Nothing else: no `ANERP_*`
-variables beyond the ones exported below (`ANERP_ENV` is not needed), no `psql`, no Docker
-unless you use it for the database. A fresh Codespace from this repository already has `uv`,
-the two virtual environments and `ANERP_EVAL_DATABASE_URL` from `.devcontainer/devcontainer.json`,
-but **no database server**: the URL points at 127.0.0.1:5432 and nothing listens there.
+variables beyond the ones exported below (`ANERP_ENV` is not needed), no `psql` on your own
+`PATH`, and no Docker unless you choose option (a) for the database.
+
+A fresh Codespace from this repository already has `uv`, the two virtual environments and
+`ANERP_EVAL_DATABASE_URL` from `.devcontainer/devcontainer.json`, but **no database server**: the
+URL points at 127.0.0.1:5432 and nothing listens there. It also has **no Docker** — the
+docker-in-docker feature was removed because it would not install on the Codespaces base image —
+so option (a) below is for machines that have Docker, and in a Codespace you want (b) or (c).
+Whichever you choose, the server must be running: a package install starts the cluster once, but
+nothing restarts it after the machine or Codespace is restarted.
 
 ```bash
 git clone https://github.com/Paulpandian-ai/headless-erp && cd headless-erp
@@ -96,16 +117,29 @@ git checkout v0.2.0
 uv sync --all-extras --dev
 uv venv .venv-adk --python 3.12 && uv pip install --python .venv-adk/bin/python google-adk "mcp<2"
 
-# a Postgres to run against - one of:
-docker compose up -d --wait                       # (a) the repo's compose file: Postgres 17 on 127.0.0.1:5432, user/db anerp/anerp_eval
-#   sudo apt-get install -y postgresql && sudo -u postgres psql -c "CREATE USER anerp WITH PASSWORD 'anerp';" -c "CREATE DATABASE anerp_eval OWNER anerp;"   # (b) a package install
-#   or (c) any hosted Postgres: create an empty database and a role that owns it
+# a Postgres to run against - one of (a), (b) or (c):
+
+# (a) machines with Docker - the repo's compose file: Postgres 17 on 127.0.0.1:5432, user/db anerp/anerp_eval
+docker compose up -d --wait
+
+# (b) a package install (this is what a Codespace needs). Note the `su - postgres` form:
+#     `sudo -u postgres psql ...` prompts for a password in a non-interactive shell and fails.
+sudo apt-get update && sudo apt-get install -y postgresql
+sudo service postgresql start                      # also needed after every machine/Codespace restart
+sudo su - postgres -c "psql -c \"CREATE USER anerp WITH PASSWORD 'anerp';\" -c 'CREATE DATABASE anerp_eval OWNER anerp;'"
+
+# (c) any hosted Postgres: create an empty database and a role that owns it
+
+pg_isready -h 127.0.0.1 -p 5432                    # must print "accepting connections" before you go on
 export ANERP_EVAL_DATABASE_URL=postgresql+psycopg://anerp:anerp@127.0.0.1:5432/anerp_eval   # the harness creates the schema and wipes the database before every run
 
 export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GOOGLE_API_KEY=...   # only for the vendors you run; Google needs a paid-tier project
 export ANERP_ANTHROPIC_MODEL=claude-sonnet-5 ANERP_OPENAI_MODEL=gpt-5.6-terra ANERP_GOOGLE_MODEL=gemini-3.8-flash
 
-# model-free checks (no cost, ~45 s): expect treatment 20/20, control 19/20
+# model-free check (no cost, ~45 s). Expected: `"runs": 120, "successes": 117` - which is
+# treatment 20/20 tasks and control 19/20 (only p2p_04_over_threshold fails, by construction:
+# the CRUD surface has no approval request to raise). If the database is unreachable the harness
+# stops before the first run and names the variable to fix.
 uv run --all-extras anerp eval --clients scripted --servers treatment,control --run-id oracle
 
 # cheapest end-to-end check of a vendor before spending on the matrix (one task, both arms, ~$0.50)
@@ -119,6 +153,22 @@ ANERP_EVAL_STEP_FACTOR=5 uv run --all-extras anerp eval --clients google_adk --s
 uv run anerp eval-merge results/claude results/openai results/google --run-id matrix
 uv run anerp eval-retry results/matrix --categories vendor_unavailable    # if any 503 dropouts
 ```
+
+The resilience experiments (`results/resilience/`) are separate commands. The two deterministic
+ones take about a minute each, cost nothing, and run on whichever backend
+`ANERP_EVAL_DATABASE_URL` selects - run each twice, once with the variable set and once with it
+unset, to cover Postgres and SQLite as the published results do. The agent experiment costs about
+$0.12 per run.
+
+```bash
+uv run --all-extras anerp eval-resilience commit-failure     # expect "all_pass": true, 24 trials
+uv run --all-extras anerp eval-resilience stale-writes       # expect all four scenarios refused on treatment, all four wrong on control
+uv run --all-extras anerp eval-resilience timeout --clients claude_agent_sdk --runs 3 --output results/resilience-rerun
+```
+
+The published `results/resilience/timeout_duplicates/raw.jsonl` is committed, so the timeout
+experiment refuses to write into it and asks for a different `--output`; the deterministic
+experiments overwrite their own JSON in place.
 
 On GitHub Actions the same matrix is `.github/workflows/eval.yml`: dispatch it, or push a tag
 `eval-matrix-<id>` (options: `+<client>`, `,servers=`, `,runs=`, `,tasks=`, `,step_factor=`,
@@ -143,6 +193,39 @@ Google with 403 that day), `eval-merge`, `eval-retry`. Every command worked as w
 document had assumed without saying, now stated above: that a Postgres server exists at the URL
 (a fresh Codespace has none), that a cheap smoke command exists, that `ANERP_ENV` is not needed,
 that the Zenodo DOI is not yet minted, and that the resilience experiments live after the tag.
+
+## Pre-publication validation (2026-10-03)
+
+Run against `main` from a fresh clone of the public repository at tag `v0.2.0` (`1024788`), in a
+scrubbed environment (`env -i`, only `HOME`, `PATH`, `ANERP_EVAL_DATABASE_URL` and the vendor keys),
+with the eval database dropped and recreated empty, so neither the repository's own virtual
+environments nor any leftover schema were in play.
+
+**What reproduced.** The model-free check: `"runs": 120, "successes": 117`, treatment 20/20 tasks
+and control 19/20 with only `p2p_04_over_threshold` failing, in 42 s; per-call latency medians
+6.3 ms treatment against 1.3 ms control, inside the range this appendix states. Both deterministic
+resilience experiments, on SQLite and on PostgreSQL 17, byte-equivalent in substance to the
+published results: commit failure 24 trials per backend, `all_pass` true; stale writes refused on
+all four scenarios on treatment (`STALE_SIMULATION` x3 plus `CREDIT_LIMIT_EXCEEDED`) and wrong on
+all four on control with the post-hoc checker flagging none. The agent experiment, re-run from the
+clean checkout for two tasks on `claude-sonnet-5` ($0.23), reproduced the published behaviours:
+one `reused_key`, one `verified_no_retry`, no duplicates.
+
+**What the pass found, and what was changed.**
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | Option (a), `docker compose up -d --wait`, cannot work in a Codespace from this repository: Docker is not installed, because docker-in-docker was removed from the devcontainer | Prerequisites now say so and point a Codespace reader at (b) or (c) |
+| 2 | Option (b)'s command failed as written: `sudo -u postgres psql ...` returns "sudo: a terminal is required to read the password" in a non-interactive shell | Replaced with the `sudo su - postgres -c "psql ..."` form that works, with the reason stated |
+| 3 | Nothing told the reader to start the server, and nothing restarts it after a Codespace restart — the validation began with port 5432 closed | Added `sudo service postgresql start`, a note that it is needed after every restart, and a `pg_isready` gate before continuing |
+| 4 | The appendix gave no commands for reproducing the resilience experiments, although they are listed among the results | Added the three commands with their expected outcomes and costs |
+| 5 | Re-running the timeout experiment on a checkout of this repository appended its rows to the committed `raw.jsonl`, silently mixing a re-run's results into the published file | The experiment now refuses to write into a non-empty `raw.jsonl` and names the `--output` option to use (`timeout_duplicates.run`) |
+| 6 | The expected output of the model-free check was given as "treatment 20/20, control 19/20", which does not match what the command prints | The expected `runs`/`successes` line is quoted, with the mapping to per-arm task counts |
+
+**What held up.** The harness's own failure message when the database is unreachable names the
+variable and points at the eval README, which is what let the pass proceed without guesswork. The
+date-relative seed calendar behaved as documented in a different month from the original runs.
+Nothing in the pass depended on state left behind by having built the project.
 
 ## Threats to validity
 
