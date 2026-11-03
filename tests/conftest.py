@@ -18,6 +18,9 @@ os.environ.setdefault("ANERP_DATABASE_URL", "sqlite://")
 os.environ.setdefault("ANERP_TOKEN_PEPPER", "test-pepper-not-secret")
 os.environ.setdefault("ANERP_BOOTSTRAP_ADMIN_TOKEN", "anerp_test_bootstrap_admin_token")
 os.environ.setdefault("LLM_PROVIDER", "none")
+# The devcontainer exports ANERP_EVAL_DATABASE_URL for real eval runs; the eval harness then
+# insists on that Postgres. Tests run on SQLite in memory (CLAUDE.md), so drop it here.
+os.environ.pop("ANERP_EVAL_DATABASE_URL", None)
 
 from anerp import db  # noqa: E402
 from anerp.config import reset_settings_cache  # noqa: E402

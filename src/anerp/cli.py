@@ -252,6 +252,9 @@ def eval_cmd(
         False, "--all", help="Full matrix: every client with credentials, both servers, all tasks"
     ),
     run_id: str | None = typer.Option(None, help="Name of results/<run_id>/ (default: timestamp)"),
+    resume: bool = typer.Option(
+        False, help="Complete results/<run_id>/: keep its rows and run only the missing cells"
+    ),
 ) -> None:
     """Run the evaluation matrix (DESIGN.md §14) and write raw.jsonl, summary.csv, report.md."""
     from anerp.eval.runner import run_matrix
@@ -264,6 +267,7 @@ def eval_cmd(
         output_dir=output,
         everything=all_,
         run_id=run_id,
+        resume=resume,
     )
     _print(result)
 

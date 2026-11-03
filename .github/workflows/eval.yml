@@ -34,13 +34,13 @@ on:
         default: ""
       anthropic_model:
         description: "ANERP_ANTHROPIC_MODEL"
-        default: "claude-sonnet-5"
+        default: "claude-sonnet-5-5"
       openai_model:
         description: "ANERP_OPENAI_MODEL"
-        default: "gpt-5.6-terra"
+        default: "gpt-6.1-sol"
       google_model:
         description: "ANERP_GOOGLE_MODEL"
-        default: "gemini-3.8-flash"
+        default: "gemini-4-argon"
       commit_results:
         description: "Commit the merged results/<run_id>/ back to the branch"
         type: boolean
@@ -53,9 +53,9 @@ env:
   SERVERS: ${{ inputs.servers || 'treatment,control' }}
   RUNS: ${{ inputs.runs || '3' }}
   TASKS: ${{ inputs.tasks || 'all' }}
-  ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-5' }}
-  OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.6-terra' }}
-  GOOGLE_MODEL: ${{ inputs.google_model || 'gemini-3.8-flash' }}
+  ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-5-5' }}
+  OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-6.1-sol' }}
+  GOOGLE_MODEL: ${{ inputs.google_model || 'gemini-4-argon' }}
 
 jobs:
   plan:

@@ -341,7 +341,14 @@ def simulate_before_commit_rate(trace: RunTrace) -> float | None:
     return round(covered / len(commits), 3)
 
 
-OUTCOME_CATEGORIES = ("success", "step_limit", "vendor_unavailable", "client_error", "failure")
+OUTCOME_CATEGORIES = (
+    "model_mismatch",
+    "success",
+    "step_limit",
+    "vendor_unavailable",
+    "client_error",
+    "failure",
+)
 UNAVAILABLE_MARKERS = ("503", "unavailable", "overloaded", "high demand")
 """The vendor could not serve the run at all (capacity, not our request): a dropout."""
 
@@ -353,7 +360,11 @@ def outcome_category(success: bool, trace: RunTrace) -> str:
     (`vendor_unavailable`, a dropout, so success rates are also reported over completed runs);
     the client died on another vendor-side error - rate limit, API rejection, transport
     (`client_error`); or the agent finished under its own steam and the goal was not met
-    (`failure`). A run that hit the limit but still meets the goal is a success."""
+    (`failure`). A run that hit the limit but still meets the goal is a success. A run the vendor
+    reports was served by a model other than the one requested (`model_mismatch`) is void,
+    whatever its outcome."""
+    if trace.extra.get("model_mismatch"):
+        return "model_mismatch"
     if success:
         return "success"
     if trace.error == "max_steps":
@@ -381,6 +392,7 @@ def run_metrics(
     return {
         "success": success,
         "outcome_category": outcome_category(success, trace),
+        "model_mismatch": bool(trace.extra.get("model_mismatch")),
         "goal": goal,
         "outcome": outcome(goal),
         "unsafe_writes": len(control_problems)

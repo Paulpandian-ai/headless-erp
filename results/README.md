@@ -1,6 +1,6 @@
 # results/
 
-Evaluation outputs land here as `results/<run_id>/raw.jsonl`, `summary.csv`, `latency.csv` and
+Evaluation outputs land here as `results/<run_id>/raw.jsonl`, `summary.csv`, `latency.csv` (where produced) and
 `report.md` (DESIGN.md §14.4). Everything except this file is gitignored; `eval.yml` uploads runs
 as workflow artifacts and can commit a `summary.csv` on request. Runs kept in the repo are
 force-added and named below.
@@ -9,16 +9,16 @@ force-added and named below.
 |---|---|
 | `scripted-both-arms-codespace-pg` | the deterministic oracle on both arms, all 20 tasks x 3 runs, no model; apt Postgres 17 on loopback in a Codespace. Tool-call latency median/p95 per arm and per-task call counts in `report.md` / `latency.csv`. |
 | `claude-both-arms-1run` | reduced matrix: `claude_agent_sdk` (claude-opus-5) on both arms, 20 tasks x 1 run, apt Postgres 17 on loopback in a Codespace. Vendor-reported cost $15.58 (treatment $8.89, control $6.69). The two arms were produced by separate `anerp eval` invocations (`--servers treatment` / `--servers control`, same code and database) and merged into one `raw.jsonl` before `write_outputs`; the control arm ran first, the treatment arm was re-run after a session restart lost the first copy. |
-| `matrix-tier-matched` | the paper's matrix at the mid tier: `claude-sonnet-5`, `gpt-5.6-terra`, `gemini-3.8-flash`, both arms, 20 tasks x 3 runs (360 rows), on GitHub Actions (`eval.yml`, Postgres 17 service containers). Merged with `anerp eval-merge` from Actions runs 34699458623 (Claude; its OpenAI and Google arms were lost to a 500K-TPM limit and Gemini 503s) 34701393421 (OpenAI, after the retry fixes), 34710710120 (Google treatment, after the retry fixes and the `describe_tool` `$ref` fix) 34719591684 + 34756636373 (Google control at 5x the per-round step limit) and 34769057511 (Google treatment at 5x), so both Google arms share one constraint and no run is cut off. |
+| `matrix-tier-matched` | the paper's matrix at the mid tier: `claude-sonnet-5`, `gpt-5.6-terra`, `gemini-3.8-flash`, both arms, 20 tasks x 3 runs (360 rows), on GitHub Actions (`eval.yml`, Postgres 17 service containers). Merged with `anerp eval-merge` from Actions runs 34699458623 (Claude; its OpenAI and Google arms were lost to a 500K-TPM limit and Gemini 503s) 34701393421 (OpenAI, after the retry fixes), 34719591684 + 34756636373 (Google control at 5x the per-round step limit) and 34769057511 (Google treatment at 5x), so both Google arms share one constraint and no run is cut off. Run 34710710120 (both Google arms at the task-default limit, after the retry and `describe_tool` `$ref` fixes) contributes no rows; it is kept as `google-*-x1`. |
 | `google-{treatment,control}-x1` / `-x5` | gemini-3.8-flash at the task-default step limit and at 5x. Control: 7/60 (50 cut off) vs 36/60 (none cut off; six 503 dropouts re-run in place with `anerp eval-retry`). Treatment: 54/60 (8 cut off) vs 56/60 (none). The matrix carries the x5 arms. |
 | `resilience/` | the three resilience experiments (commit failure at every transaction stage, scripted stale writes, induced timeouts with agents in the loop); tables in `resilience/README.md`. |
-| `dup01-keys` | dup_01_retry_storm on treatment for all three vendors with the idempotency key, simulation id and kernel outcome recorded per commit: every retry minted a different key. |
+| `dup01-keys` | dup_01_retry_storm on treatment for all three vendors with the idempotency key, simulation id and kernel outcome recorded per commit: in all three runs the retry minted a different key. |
 
 The final numbers are copied below so they can be read without opening `raw.jsonl`; `REPRODUCIBILITY.md` at the repo root records the exact commit, model identifiers, dates, seed and how to re-run.
 
 ## Final matrix (`matrix-tier-matched`)
 
-claude-sonnet-5 / gpt-5.6-terra / gemini-3.8-flash; both arms; 20 tasks x 3 runs per cell (360 rows). Both arms run on one kernel in the harness process against one Postgres 17; they differ only in the tool surface. Runs: 2026-09-12 (Claude, OpenAI, Google treatment at the task-default step limit), 2026-09-13 to 2026-09-16 (Google arms at 5x the step limit). Outcome categories: success (goal met), step_limit (budget exhausted before the goal), vendor_unavailable (503/overloaded after every retry), client_error (rate limit / API rejection / transport), failure (finished, goal not met).
+claude-sonnet-5 / gpt-5.6-terra / gemini-3.8-flash; both arms; 20 tasks x 3 runs per cell (360 rows). Both arms run on one kernel in the harness process against one Postgres 17; they differ only in the tool surface. Runs: 2026-09-12 (Claude, OpenAI), 2026-09-12 to 2026-09-13 (Google arms at 5x the step limit, including the dropout re-runs); merged 2026-09-16. Outcome categories: success (goal met), step_limit (budget exhausted before the goal), vendor_unavailable (503/overloaded after every retry), client_error (rate limit / API rejection / transport), failure (finished, goal not met).
 
 ### Headline per server x model (mean over tasks)
 
@@ -35,7 +35,7 @@ Trial-balance integrity is 1.0 in every cell. The step limit's unit differs by a
 
 ### Task success per cell (successes out of 3 runs)
 
-Note `dup_01_retry_storm`: 3/3 on every control cell and 0-1/3 on treatment. The CRUD surface makes the agent read the table before inserting, so it finds the first order; on the agent-native surface every retry minted a fresh idempotency key (see the key table below).
+Note `dup_01_retry_storm`: 3/3 on every control cell and 0-1/3 on treatment. The CRUD surface makes the agent read the table before inserting, so it finds the first order; on the agent-native surface 8 of the 9 repeats created a second order. Keys are recorded for 2 of those 8 (both Gemini; the Claude and OpenAI arms ran before traces carried keys) and for the 3 separate `dup01-keys` runs below; in each recorded case the second session committed under a different key, in one Gemini run after first reusing a key and being refused.
 
 | task | T sonnet-5 | T gpt-5.6-terra | T gemini-3.8-flash | C sonnet-5 | C gpt-5.6-terra | C gemini-3.8-flash |
 |---|---|---|---|---|---|---|
@@ -84,7 +84,7 @@ T = treatment (agent-native surface), C = control (CRUD baseline).
 | gpt-5.6-terra | control | 3.00 | 86% | 74 | $2.23 | list price x tokens |
 | gpt-5.6-terra | treatment | 10.16 | 79% | 32 | $6.18 | list price x tokens |
 
-Usable matrix: $55.82. Discarded attempts (throttled arms, pre-fix Google runs, default-limit Google arms, dropout retries) add roughly $50; 429/503 requests are not billed. List prices as of 2026-09-12: Sonnet 5 $2/$0.20 cached/$10 out, cache writes 1.25x; gpt-5.6-terra $2/$0.20/$12; gemini-3.8-flash $0.75/$0.075/$3.75 per MTok.
+Usable matrix: $55.82. Of the discarded attempts, only the default-limit Google arms are kept in the repo (`google-*-x1`, $16.11 at list price); the others (throttled arms, pre-fix Google runs, dropout retries) were not kept, so their cost is not recorded here; 429/503 requests are not billed. List prices as of 2026-09-12: Sonnet 5 $2/$0.20 cached/$10 out, cache writes 1.25x; gpt-5.6-terra $2/$0.20/$12; gemini-3.8-flash $0.75/$0.075/$3.75 per MTok.
 
 ### close_01_clean: branch taken
 
@@ -106,7 +106,7 @@ Usable matrix: $55.82. Discarded attempts (throttled arms, pre-fix Google runs, 
 | control | 10-24 (default) | 50 | 7/60 | 50 | 0 | 3 | 27 | 78 |
 | control | 50-120 (x5) | 0 | 36/60 | 0 | 0 | 24 | 52 | 298 |
 
-Google control at 5x had 6 vendor_unavailable dropouts before the re-run (34/60 = 0.567 over all runs vs 34/54 = 0.630 over completed runs); they were re-run in place with `anerp eval-retry` (2 successes, 4 failures; two dropped again once). Dropouts arrived 16-69 calls into long control runs, so they are not random with respect to run length (DESIGN.md §14.4).
+Google control at 5x had 6 vendor_unavailable dropouts before the re-run (34/60 = 0.567 over all runs vs 34/54 = 0.630 over completed runs); they were re-run in place with `anerp eval-retry` in two passes (2 rows replaced, then the remaining 4; final: 2 successes, 4 failures). Dropouts arrived 16-69 calls into long control runs, so they are not random with respect to run length (DESIGN.md §14.4).
 
 ### dup_01_retry_storm on treatment: the two commits (`dup01-keys`)
 
@@ -119,7 +119,7 @@ Google control at 5x had 6 vendor_unavailable dropouts before the re-run (34/60 
 | gemini-3.8-flash | 1 | `po-bolt-hose10m-001` | applied |
 | gemini-3.8-flash | 2 | `commit-po-bolt-hose10m-20` | applied |
 
-Same payload both times; every retry minted a different key, so the kernel applied both. Client-chosen keys are not stable across agent sessions: server-enforced idempotency protects retried envelopes, not repeated intent (DESIGN.md §8.2, future work: intent fingerprinting).
+Same payload both times; in each of these three runs the retry minted a different key, so the kernel applied both. Client-chosen keys are not stable across agent sessions: server-enforced idempotency protects retried envelopes, not repeated intent (DESIGN.md §8.2, future work: intent fingerprinting).
 
 ### Reference data points
 
