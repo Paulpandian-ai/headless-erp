@@ -59,6 +59,10 @@ class ClaudeAgentSDKClient:
             max_turns=max_steps,
             cwd=self._cwd,
             setting_sources=[],
+            # Without this the CLI makes a small side request on a Haiku model (~1K tokens, a
+            # title/summary), so `model_usage` names a model the agent never ran on and the run
+            # would be flagged model_mismatch. Every agent turn is on `self.model` either way.
+            env={"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
         )
         trace = RunTrace()
         # What the vendor says served the run (the API response's `model`), not the id we asked

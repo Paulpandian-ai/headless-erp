@@ -104,8 +104,12 @@ class ResultMessage:
         self.usage = {"input_tokens": 10, "output_tokens": 4}
 
 
+SEEN_OPTIONS: list[Any] = []
+
+
 def _fake_query(messages: list[Any], exc: Exception | None):
     async def query(*, prompt: str, options: Any):  # noqa: ARG001
+        SEEN_OPTIONS.append(options)
         for m in messages:
             yield m
         if exc is not None:
@@ -161,3 +165,12 @@ def test_claude_cost_guessed_by_the_cli_is_not_called_vendor_reported(
     assert trace.extra["cost_basis"] == ["unknown"]
     assert "vendor_reported_cost_usd" not in trace.extra
     assert trace.extra["cli_estimated_cost_usd"] == 0.5
+
+
+def test_claude_cli_side_requests_are_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI's non-essential side request runs on another model; it must not reach the vendor
+    (it would make every row model_mismatch)."""
+    result = ResultMessage("success", {"claude-sonnet-5-5": {"costBasis": "list"}})
+    result.is_error = False
+    _claude(monkeypatch, [result], None)
+    assert SEEN_OPTIONS[-1].env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
