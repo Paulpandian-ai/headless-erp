@@ -31,6 +31,7 @@ async def run(job: dict[str, Any]) -> dict[str, Any]:
         "steps": 0,
         "error": None,
         "extra": {"cache_read_input_tokens": 0, "reasoning_tokens": 0},
+        "served_models": [],
     }
     toolset = MCPToolset(  # type: ignore[no-untyped-call]
         connection_params=StreamableHTTPConnectionParams(
@@ -80,6 +81,9 @@ async def run(job: dict[str, Any]) -> dict[str, Any]:
                         "latency_ms": 0.0,
                     }
                 )
+            served = getattr(event, "model_version", None)  # what Gemini says served the call
+            if served and event.author != "user" and served not in trace["served_models"]:
+                trace["served_models"].append(str(served))
             usage = getattr(event, "usage_metadata", None)
             if usage is not None and event.author != "user":
                 # One LLM response per event carrying usage; sum them.
@@ -102,6 +106,7 @@ async def run(job: dict[str, Any]) -> dict[str, Any]:
         trace["error"] = "max_steps"
     finally:
         await toolset.close()
+    trace["extra"]["served_models"] = trace.pop("served_models")
     return trace
 
 

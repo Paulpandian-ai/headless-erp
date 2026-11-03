@@ -9,7 +9,7 @@ them and how to produce them again.
 | | |
 |---|---|
 | Release | `v0.2.1` (git tag), GitHub release of the same name. `v0.2.0` is the release the matrix and resilience results were produced under; `v0.2.1` adds the framework verification pass, the pre-publication validation record and the harness guard that came out of it, and changes no result |
-| Commit | the head of `main` the `v0.2.1` tag points at (`git rev-parse v0.2.1^{}`); the results were produced at `v0.2.0` (`1024788`), an ancestor of it; every result in `results/`, the resilience experiments included, was produced by the commits listed per run below, all ancestors of it |
+| Commit | the `v0.2.1` tag points at `3a8a26a` (`git rev-parse v0.2.1^{}`); `main` has one later, metadata-only commit (`ede19bb`, DOI citations). The September results were not produced at a tag: each was produced by the commit listed per run below, all of them ancestors of `v0.2.0` (`1024788`, 2026-09-19), which is the first release that contains them |
 | Repository | https://github.com/Paulpandian-ai/headless-erp |
 | Archive / DOI | Zenodo concept DOI, always the latest version: https://doi.org/10.5281/zenodo.22848737. Version DOIs: v0.2.0 https://doi.org/10.5281/zenodo.22848738; v0.2.1 https://doi.org/10.5281/zenodo.23122991 |
 | License | Apache-2.0 |
@@ -23,7 +23,7 @@ of `raw.jsonl` (`model`) and in `summary.csv`.
 |---|---|---|---|---|
 | `claude_agent_sdk` | `claude-agent-sdk` (Claude Code CLI) | `claude-sonnet-5` | mid | $2.00 / $0.20 / $10.00 (cache writes 1.25x) |
 | `openai_agents_sdk` | `openai-agents` | `gpt-5.6-terra` | mid | $2.00 / $0.20 / $12.00 |
-| `google_adk` | `google-adk` 2.9.0 in its own interpreter | `gemini-3.8-flash` | mid | $0.75 / $0.075 / $3.75 |
+| `google_adk` | `google-adk` in its own interpreter (2.9.0 in the Codespace's `.venv-adk`; installed unpinned on Actions, where the version was not recorded) | `gemini-3.8-flash` | mid | $0.75 / $0.075 / $3.75 |
 | `claude_agent_sdk` (reference run only) | | `claude-opus-5` | strongest | $5.00 / $0.50 / $25.00 |
 
 **Model availability, re-checked 2026-10-03.** All three pinned ids are still served and their
@@ -45,20 +45,56 @@ vendors' default sampling and thinking settings through their own agent SDKs; th
 no temperature, effort or thinking parameters (`src/anerp/eval/clients/`). The system prompt is
 the same neutral text for every adapter (`clients/base.py:NEUTRAL_SYSTEM_PROMPT`).
 
+### Tier matching for the 2026-11 re-test (`results/final-2026-11/`)
+
+The September rule above ("current-generation mid-tier") needed a judgment of what each vendor's
+mid tier is. From 2026-11 the choice is made by price, mechanically:
+
+> **Rule.** For each vendor, the candidates are the text models of its current generation on its
+> own pricing page, at standard-tier, short-context list prices per MTok. Each vendor's pick is the
+> candidate whose price is nearest to the other two vendors' picks, distance being the sum over
+> those two of |difference in input price| + |difference in output price|. Ties go to the candidate
+> that exactly matches another vendor's pick. The three picks are a fixed point of the rule: no
+> vendor can move closer to the other two.
+
+Applied with the list prices of 2026-11-03:
+
+| vendor | candidates (input / output per MTok) | pick | distance to the other two |
+|---|---|---|---|
+| Anthropic | `claude-fable-5-1` $10 / $50; `claude-opus-5-5` $4 / $20; `claude-sonnet-5-5` $2 / $10; `claude-haiku-5-5` $0.10 / $0.50 (prompts up to 100K tokens) | `claude-sonnet-5-5` | 0 |
+| OpenAI | `gpt-6-astra` $10 / $50; `gpt-6.1-sol` $2 / $10; `gpt-6.1-terra` $1 / $5; `gpt-6-luna` $0.10 / $0.50 | `gpt-6.1-sol` | 0 |
+| Google | `gemini-4-argon` $2 / $10 (to 2026-11-30); `gemini-3.8-flash` $0.75 / $3.75 | `gemini-4-argon` | 0 |
+
+All three are priced $2 / $10, so the fixed point has distance zero and is unique among the
+candidates. Two things follow and are stated rather than hidden:
+
+- The rule matches **price, not the vendors' tier labels**. Google calls `gemini-4-argon` "our
+  flagship reasoning model"; the rule picks it because it is the price peer of the other two, and
+  `gemini-3.8-flash` ("our most intelligent Flash model", the September pick) is not. Against
+  `claude-sonnet-5-5` and `gpt-6.1-sol` the September-style judgment would have said Flash.
+- The match is **dated**. `gemini-4-argon` rises to $4 / $20 on 2026-12-01 (and `gemini-3.8-flash`
+  to $1.50 / $7.50 on 2027-01-01); after that the same rule may pick differently, so a re-run must
+  re-apply it to the prices of its own date. Without the exact-match tie-break, OpenAI's `sol` and
+  `terra` would tie (any price between the other two minimises the summed distance equally).
+
+Sources, read 2026-11-03: Anthropic models endpoint and https://platform.claude.com/docs/en/about-claude/pricing
+(Sonnet 5.5: $2 input, $2.50 5-minute cache write, $0.10 cache hit (0.05x input; it read $0.20 on 2026-10-03), $10 output); https://developers.openai.com/api/docs/pricing;
+https://aistudio.google.com/docs/pricing; each vendor's models endpoint for the ids.
+
 ## Runs
 
 | results directory | produced by | date (UTC) | code |
 |---|---|---|---|
 | `matrix-tier-matched` (360 rows) | merged from the runs below with `anerp eval-merge` | 2026-09-16 | `b16fb7c` |
-| Claude arms (120 rows) | GitHub Actions run 34699458623, tag `eval-matrix-1` | 2026-09-12 | `ece71e4` |
-| OpenAI arms (120 rows) | Actions run 34701393421, tag `eval-matrix-2+openai_agents_sdk+google_adk` | 2026-09-12 | `e820f45` |
-| Google treatment at 5x (60 rows) | Actions run 34769057511, tag `eval-matrix-6+google_adk,servers=treatment,step_factor=5` | 2026-09-13 | `b5faa1b` |
-| Google control at 5x (60 rows) | Actions runs 34719591684 + 34756636373 (tags `eval-matrix-4+...` and `eval-matrix-5+...`), six 503 dropouts re-run in place with `anerp eval-retry` in a Codespace | 2026-09-12 to 2026-09-16 | `978a3ea`-`b5faa1b` |
-| `google-treatment-x1`, `google-control-x1` | the same arms at the task-default step limit (Actions 34710710120 and 34719591684) | 2026-09-12/13 | `6a6524b`+ |
+| Claude arms (120 rows) | GitHub Actions run 34699458623, tag `eval-matrix-1` | 2026-09-12 | `9587fcd` (the tag; harness code as in `ece71e4`, only `eval.yml` differs) |
+| OpenAI arms (120 rows) | Actions run 34701393421, tag `eval-matrix-2+openai_agents_sdk+google_adk` | 2026-09-12 | `6a6524b` (the tag; differs from `e820f45` only in the Google ADK worker) |
+| Google treatment at 5x (60 rows) | Actions run 34769057511, tag `eval-matrix-6+google_adk,servers=treatment,step_factor=5` | 2026-09-13 | `a348312` (the tag) |
+| Google control at 5x (60 rows) | Actions runs 34719591684 + 34756636373 (tags `eval-matrix-4+...` and `eval-matrix-5+...`), six 503 dropouts re-run in place with `anerp eval-retry` in a Codespace in two passes (2 rows, then the remaining 4) | 2026-09-12 to 2026-09-13 | `3dc8773` (eval-matrix-4, 12 tasks) and `d9f7c02` (eval-matrix-5, the 8 p2p tasks); dropout re-runs on the Codespace checkout of 2026-09-13 |
+| `google-treatment-x1`, `google-control-x1` | the same arms at the task-default step limit, both from Actions run 34710710120 (tag `eval-matrix-3+google_adk`, arms one after the other) | 2026-09-12 | `91f8e2d` |
 | `claude-both-arms-1run` (40 rows) | Codespace, `anerp eval --clients claude_agent_sdk` | 2026-09-12 | `3fb5c6b` |
-| `scripted-both-arms-codespace-pg` (120 rows) | Codespace, `anerp eval --clients scripted` | 2026-09-11 | `e392bae` |
+| `scripted-both-arms-codespace-pg` (120 rows) | Codespace, `anerp eval --clients scripted` | 2026-09-12 (00:04 UTC) | committed in `9039707` |
 | `dup01-keys` (3 rows) | Codespace, `dup_01_retry_storm` on treatment, keys captured | 2026-09-12 | `3d0493d`+ |
-| `resilience/` (commit failure 48 trials x 2 backends; stale writes 8 trials x 2 backends; timeout/duplicates 44 agent runs) | Codespace, `anerp eval-resilience {commit-failure,stale-writes,timeout}`; SQLite in memory and PostgreSQL 17.11 | 2026-09-16 to 2026-09-19 | `c3c3248` |
+| `resilience/` (commit failure 24 trials x 2 backends; stale writes 8 trials x 2 backends; timeout/duplicates 44 agent runs) | Codespace, `anerp eval-resilience {commit-failure,stale-writes,timeout}`; SQLite in memory and PostgreSQL 17.11 | timeout rows 2026-09-16; the deterministic JSON files carry no timestamp | `c3c3248` is the first commit containing the experiment code; the timeout rows were produced on the working tree before it was committed |
 
 Environment for the Actions runs: `ubuntu-latest`, Python 3.12 via `uv`, a `postgres:17`
 service container per job, one job per vendor with the two arms run one after the other.
@@ -86,15 +122,22 @@ Policies are `policies/default.yaml` (PO approval threshold 10,000.00; price tol
 - **Step limit**: the task's `max_steps` (10-24) per agent round. Its unit is the adapter's
   (`max_turns` for the Claude and OpenAI SDKs, `max_llm_calls` for Google ADK) and so is not
   comparable across vendors. The Google cells were run with `ANERP_EVAL_STEP_FACTOR=5` /
-  `ANERP_EVAL_STEP_FACTOR_CONTROL=5` (50-120 per round) so that no run is cut off; the effective
-  limit is on every row as `metrics.max_steps`.
+  `ANERP_EVAL_STEP_FACTOR_CONTROL=5` (50-120 per round) so that no run is cut off. The effective
+  limit is recorded per row as `metrics.max_steps` from `05cf2f0` on: the Google x5 rows carry it;
+  the Claude and OpenAI matrix rows and the Google x1 rows predate it and ran at the task default.
+  On Claude rows `trace.steps` is the CLI's `num_turns`, which counts more than `--max-turns` does
+  (it often exceeds the limit with no error), so exhaustion is read from the error, not the count.
 - **Retries**: OpenAI client `max_retries=10`; ADK Gemini `HttpRetryOptions(attempts=8)` on
   429/5xx; a run whose client died on a rate limit is repeated from a fresh kernel up to twice
-  (`attempts` on the row). A billing 429 is not retried.
+  (`attempts` on the row). A billing 429 is not retried. The Claude matrix arm (`9587fcd`) predates
+  the run-level retry (`e820f45`), so its rows have no `attempts` field; none of them errored.
 - **Human loop**: the harness plays the warehouse on both arms with the task's expected
   quantities (`runner.human_step`).
 - **Outcome categories**: success / step_limit / vendor_unavailable / client_error / failure,
-  recomputed from each row's `success` and `error`.
+  recomputed from each row's `success` and `error`. From the 2026-11 re-test on, also
+  `model_mismatch`: the vendor's response names a model other than the one requested (the row's
+  `served_models`), and the run is void whatever its outcome. Rows written before that record no
+  served model and cannot be checked this way.
 
 ## How to re-run
 
@@ -157,8 +200,8 @@ uv run anerp eval-retry results/matrix --categories vendor_unavailable    # if a
 The resilience experiments (`results/resilience/`) are separate commands. The two deterministic
 ones take about a minute each, cost nothing, and run on whichever backend
 `ANERP_EVAL_DATABASE_URL` selects - run each twice, once with the variable set and once with it
-unset, to cover Postgres and SQLite as the published results do. The agent experiment costs about
-$0.12 per run.
+unset, to cover Postgres and SQLite as the published results do. The agent experiment costs
+$0.12-0.16 per run (the published Claude rows report $2.39 for 15 runs).
 
 ```bash
 uv run --all-extras anerp eval-resilience commit-failure     # expect "all_pass": true, 24 trials
@@ -172,7 +215,8 @@ experiments overwrite their own JSON in place.
 
 On GitHub Actions the same matrix is `.github/workflows/eval.yml`: dispatch it, or push a tag
 `eval-matrix-<id>` (options: `+<client>`, `,servers=`, `,runs=`, `,tasks=`, `,step_factor=`,
-`,step_factor_control=`). Expect roughly $45 in API spend for the matrix at 2026-09 list prices and
+`,step_factor_control=`). The usable September matrix cost $55.82 at 2026-09 prices (`results/README.md`);
+budget more for discarded attempts and retries, and expect
 1.5-6 h of wall clock per vendor; Gemini's control arm at 5x is the slow one (about 5 min/run).
 
 Numbers will not reproduce bit-for-bit: the models are non-deterministic, vendor availability

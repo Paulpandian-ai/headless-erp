@@ -13,7 +13,7 @@ from typing import Any
 from anerp.eval.clients.base import NEUTRAL_SYSTEM_PROMPT, RunTrace, ToolCallRecord
 from anerp.eval.surface import RemoteSurface, ToolSurface
 
-DEFAULT_MODEL = "claude-opus-5"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 
 
 class ClaudeAgentSDKClient:
@@ -61,10 +61,17 @@ class ClaudeAgentSDKClient:
             setting_sources=[],
         )
         trace = RunTrace()
+        # What the vendor says served the run (the API response's `model`), not the id we asked
+        # for; and the CLI's cost basis, which is "list" only when it knows the model's prices.
+        served: set[str] = set()
+        cost_basis: set[str] = set()
 
         async def go() -> None:
             async for message in query(prompt=narrative, options=options):
                 kind = type(message).__name__
+                model = getattr(message, "model", None)
+                if kind == "AssistantMessage" and model and not str(model).startswith("<"):
+                    served.add(str(model))  # "<synthetic>" marks CLI-made messages
                 content: Any = getattr(message, "content", None)
                 if isinstance(content, list):
                     for block in content:
@@ -101,6 +108,10 @@ class ClaudeAgentSDKClient:
                     if cost is not None:
                         trace.extra["vendor_reported_cost_usd"] = float(cost)
                     trace.steps = int(getattr(message, "num_turns", 0) or 0)
+                    for used_model, info in (getattr(message, "model_usage", None) or {}).items():
+                        served.add(str(used_model))
+                        if isinstance(info, dict) and info.get("costBasis"):
+                            cost_basis.add(str(info["costBasis"]))
                     if getattr(message, "subtype", "") == "error_max_turns":
                         trace.error = "max_steps"
                     elif getattr(message, "is_error", False):
@@ -108,5 +119,19 @@ class ClaudeAgentSDKClient:
                             getattr(message, "errors", None) or getattr(message, "subtype", "")
                         )
 
-        anyio.run(go)
+        try:
+            anyio.run(go)
+        except Exception as exc:
+            # The SDK raises after yielding the error_max_turns result. Exhausting the step
+            # limit is an outcome, not a client failure: keep the trace gathered so far.
+            if trace.error != "max_steps" and "maximum number of turns" not in str(exc):
+                raise
+            trace.error = "max_steps"
+            trace.final_text = trace.final_text or "Stopped: step limit reached."
+        trace.extra["served_models"] = sorted(served)
+        if cost_basis:
+            trace.extra["cost_basis"] = sorted(cost_basis)
+        if cost_basis - {"list"} and "vendor_reported_cost_usd" in trace.extra:
+            # The CLI did not know this model's prices and guessed: not a vendor figure.
+            trace.extra["cli_estimated_cost_usd"] = trace.extra.pop("vendor_reported_cost_usd")
         return trace

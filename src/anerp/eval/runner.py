@@ -332,7 +332,25 @@ def _merge(trace: RunTrace, part: RunTrace) -> None:
     trace.final_text = part.final_text
     trace.error = part.error or trace.error
     for k, v in part.extra.items():
-        trace.extra[k] = trace.extra.get(k, 0) + v if isinstance(v, int | float) else v
+        if isinstance(v, list):  # e.g. served_models: every round's, once each
+            trace.extra[k] = sorted({*trace.extra.get(k, []), *v})
+        else:
+            trace.extra[k] = trace.extra.get(k, 0) + v if isinstance(v, int | float) else v
+
+
+def same_model(served: str, requested: str) -> bool:
+    """The vendor's id for what served a call matches the requested id, allowing the dated
+    snapshot suffix vendors append (`gpt-6.1-sol-2026-09-27`) and a `models/` prefix."""
+    served = served.removeprefix("models/")
+    return served == requested or served.startswith(requested + "-")
+
+
+def check_served_model(trace: RunTrace, requested: str | None) -> None:
+    """Flag a run that the vendor reports was served by a model other than the one requested
+    (a silent fallback would otherwise be attributed to the requested model)."""
+    served = trace.extra.get("served_models")
+    if served and requested:
+        trace.extra["model_mismatch"] = not all(same_model(m, requested) for m in served)
 
 
 def _server_side_trace(
@@ -476,6 +494,7 @@ def _run_once(
         log.exception("client %s failed on %s", client.name, task["id"])
         trace.error = f"{type(exc).__name__}: {exc}"
     wall = time.perf_counter() - t0
+    check_served_model(trace, getattr(client, "model", None))
     with contextlib.suppress(Exception):
         _server_side_trace(env, server, surface, trace)
     metrics = run_metrics(q, task, before, trace, server, wall)
@@ -485,6 +504,7 @@ def _run_once(
         "server": server,
         "client": client.name,
         "model": getattr(client, "model", None),
+        "served_models": trace.extra.get("served_models"),
         "task": task["id"],
         "run": run,
         "traps": task.get("traps", []),
@@ -503,13 +523,18 @@ def run_matrix(
     output_dir: str,
     everything: bool = False,
     run_id: str | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     """Both arms run against one local kernel (ANERP_EVAL_DATABASE_URL, else SQLite in memory),
     each tool surface served from this process on a loopback port when a client needs HTTP, so
     treatment and control differ only in the tool surface. Setting ANERP_EVAL_REMOTE=1 with
     ANERP_URL and ANERP_ADMIN_TOKEN instead runs the treatment arm against that deployment (the
-    agents get a freshly minted, scoped token) - useful for demos, not for the comparison."""
-    from anerp.eval.report import write_outputs
+    agents get a freshly minted, scoped token) - useful for demos, not for the comparison.
+
+    With `resume`, an existing results/<run_id>/raw.jsonl is kept and appended to: a
+    (server, client, task, run) cell already in it is not run again, so a matrix cut short (the
+    host stopped, the process was killed) is completed by re-issuing the same command."""
+    from anerp.eval.report import load_raw, write_outputs
 
     chosen = []
     for name in ALL_CLIENTS if everything else clients:
@@ -523,9 +548,27 @@ def run_matrix(
             "no eval client is available: set LLM_PROVIDER / API keys, or use --clients scripted"
         )
     task_list = load_tasks(tasks)
+    if resume and not run_id:
+        raise SystemExit("--resume needs the --run-id of the run to complete")
     run_id = run_id or utcnow().strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
     run_dir = Path(output_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = run_dir / "raw.jsonl"
+    previous: list[dict[str, Any]] = []
+    if raw_path.exists() and raw_path.stat().st_size:
+        if not resume:
+            raise SystemExit(f"{raw_path} already has rows: pass --resume to complete it")
+        previous = load_raw(raw_path)
+        models = {c.name: getattr(c, "model", None) for c in chosen}
+        for row in previous:
+            if row["client"] in models and row.get("model") != models[row["client"]]:
+                raise SystemExit(
+                    f"{raw_path} has {row['client']} rows for model {row.get('model')}, but this "
+                    f"invocation would run {models[row['client']]}; refusing to mix models"
+                )
+    done = {(r["server"], r["client"], r["task"], int(r["run"])) for r in previous}
+    if previous:
+        log.info("resuming %s: %s rows already written", run_id, len(previous))
     over_http = any(getattr(c, "needs_remote", False) for c in chosen)
 
     agent_subject = "agent:eval"
@@ -564,14 +607,16 @@ def run_matrix(
         for lb in loopbacks:
             log.info("%s surface served at %s (kernel: %s)", lb.name, lb.url, local_env.backend)
 
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = list(previous)
     try:
-        with (run_dir / "raw.jsonl").open("w") as f:
+        with raw_path.open("a") as f:
             for server in servers:
                 env = remote_env if server == "treatment" and remote_env else local_env
                 for client in chosen:
                     for task in task_list:
                         for run in range(1, runs + 1):
+                            if (server, client.name, task["id"], run) in done:
+                                continue
                             row = run_one(env, client, server, task, run)
                             row["backend"] = env.backend
                             rows.append(row)

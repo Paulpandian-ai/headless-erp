@@ -15,7 +15,7 @@ from pathlib import Path
 from anerp.eval.clients.base import NEUTRAL_SYSTEM_PROMPT, RunTrace, ToolCallRecord
 from anerp.eval.surface import RemoteSurface, ToolSurface
 
-DEFAULT_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_MODEL = "gemini-4-argon"
 WORKER = Path(__file__).with_name("google_adk_worker.py")
 
 

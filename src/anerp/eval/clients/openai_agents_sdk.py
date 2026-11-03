@@ -8,7 +8,7 @@ import os
 from anerp.eval.clients.base import NEUTRAL_SYSTEM_PROMPT, RunTrace, ToolCallRecord
 from anerp.eval.surface import RemoteSurface, ToolSurface
 
-DEFAULT_MODEL = "gpt-5"
+DEFAULT_MODEL = "gpt-6.1-sol"
 
 
 class OpenAIAgentsClient:
@@ -46,6 +46,7 @@ class OpenAIAgentsClient:
                 error="needs_remote",
             )
         trace = RunTrace()
+        served: set[str] = set()  # `response.model` of every completed model response
 
         async def go() -> None:
             async with MCPServerStreamableHttp(
@@ -68,6 +69,11 @@ class OpenAIAgentsClient:
                 result = Runner.run_streamed(agent, narrative, max_turns=max_steps)
                 try:
                     async for event in result.stream_events():
+                        data = getattr(event, "data", None)
+                        if getattr(data, "type", None) == "response.completed":
+                            model = getattr(getattr(data, "response", None), "model", None)
+                            if model:
+                                served.add(str(model))
                         item = getattr(event, "item", None)
                         if getattr(item, "type", None) != "tool_call_item":
                             continue
@@ -98,4 +104,5 @@ class OpenAIAgentsClient:
                     )
 
         anyio.run(go)
+        trace.extra["served_models"] = sorted(served)
         return trace
